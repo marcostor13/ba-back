@@ -1,4 +1,11 @@
-import { PartialType } from '@nestjs/mapped-types';
-import { CreateKitchenQuoteDto } from './create-quote.dto';
+import { IsOptional, IsString, IsObject } from 'class-validator';
 
-export class UpdateQuoteDto extends PartialType(CreateKitchenQuoteDto) { }
+export class UpdateQuoteDto {
+    @IsString()
+    @IsOptional()
+    category?: string;
+
+    @IsOptional()
+    @IsObject()
+    data?: Record<string, unknown>;
+}

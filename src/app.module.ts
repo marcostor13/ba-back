@@ -8,6 +8,7 @@ import { UsersModule } from './modules/users/users.module';
 import { RoleModule } from './modules/role/role.module';
 import { CustomerModule } from './modules/customer/customer.module';
 import { QuoteModule } from './modules/quote/quote.module';
+import { AudioModule } from './modules/audio/audio.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -19,6 +20,7 @@ import { QuoteModule } from './modules/quote/quote.module';
     RoleModule,
     CustomerModule,
     QuoteModule,
+    AudioModule,
   ],
   controllers: [AppController],
   providers: [AppService],

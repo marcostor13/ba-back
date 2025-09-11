@@ -1,0 +1,102 @@
+{
+  "info": {
+    "name": "Audio Summarize API",
+    "description": "Colección de Postman para probar el endpoint de resumen de audio",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Summarize Audio",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "audio",
+              "type": "file",
+              "src": "/path/to/your/audio/file.mp3",
+              "description": "Archivo de audio a procesar"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{baseUrl}}/audio/summarize",
+          "host": ["{{baseUrl}}"],
+          "path": ["audio", "summarize"]
+        },
+        "description": "Endpoint para transcribir y resumir archivos de audio"
+      },
+      "response": [
+        {
+          "name": "Success Response",
+          "originalRequest": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "audio",
+                  "type": "file",
+                  "src": "/path/to/your/audio/file.mp3"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/audio/summarize",
+              "host": ["{{baseUrl}}"],
+              "path": ["audio", "summarize"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "cookie": [],
+          "body": "{\n  \"success\": true,\n  \"data\": {\n    \"summary\": \"Este es el resumen del contenido del audio transcrito...\"\n  },\n  \"message\": \"Audio procesado y resumido exitosamente\"\n}"
+        },
+        {
+          "name": "Error Response - No File",
+          "originalRequest": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": []
+            },
+            "url": {
+              "raw": "{{baseUrl}}/audio/summarize",
+              "host": ["{{baseUrl}}"],
+              "path": ["audio", "summarize"]
+            }
+          },
+          "status": "Bad Request",
+          "code": 400,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "cookie": [],
+          "body": "{\n  \"statusCode\": 400,\n  \"message\": \"No se ha proporcionado ningún archivo de audio\",\n  \"error\": \"Bad Request\"\n}"
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "description": "URL base de la API"
+    }
+  ]
+}

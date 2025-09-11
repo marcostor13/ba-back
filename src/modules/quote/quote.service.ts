@@ -1,75 +1,43 @@
 import { Injectable } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
 import { CreateKitchenQuoteDto } from './dto/create-quote.dto';
-import { KITCHEN_QUOTE_CONFIG } from './config/quote.config';
-import { LineItem, QuoteResult } from './types/quote.types';
+import { UpdateQuoteDto } from './dto/update-quote.dto';
+import { Quote } from './schemas/quote.schema';
 
 @Injectable()
 export class QuoteService {
-  calculateKitchenQuote(dto: CreateKitchenQuoteDto): QuoteResult {
-    const lineItems: LineItem[] = [];
-    let totalPrice = 0;
+  constructor(
+    @InjectModel(Quote.name) private readonly quoteModel: Model<Quote>,
+  ) { }
 
-    // Iterate over every possible key from our price configuration
-    for (const key in KITCHEN_QUOTE_CONFIG) {
-      if (Object.prototype.hasOwnProperty.call(dto, key)) {
-        const value = dto[key];
-        const config = KITCHEN_QUOTE_CONFIG[key];
+  async createKitchenQuote(dto: CreateKitchenQuoteDto) {
+    const created = await this.quoteModel.create({
+      data: dto as unknown as Record<string, unknown>,
+      category: 'kitchen',
+    });
+    return created.toObject();
+  }
 
-        // Skip if the value is null, false, 0, or an empty string
-        if (!value) {
-          continue;
-        }
-
-        let itemPrice = 0;
-        let quantity = 1;
-
-        switch (config.type) {
-          case 'FIXED':
-            // For boolean fields that are true
-            if (value === true) {
-              itemPrice = config.price;
-            }
-            break;
-
-          case 'PER_UNIT':
-            let numericValue: number;
-
-            // If quantity is specified in another field, use that field's value
-            if (config.quantityField && dto[config.quantityField]) {
-              const quantityValue = dto[config.quantityField];
-              numericValue = typeof quantityValue === 'string'
-                ? parseFloat(quantityValue)
-                : quantityValue as number;
-            } else {
-              // Otherwise, use the field's own value
-              numericValue = typeof value === 'string'
-                ? parseFloat(value)
-                : value as number;
-            }
-
-            if (!isNaN(numericValue) && numericValue > 0) {
-              quantity = numericValue;
-              itemPrice = quantity * config.price;
-            }
-            break;
-        }
-
-        if (itemPrice > 0) {
-          totalPrice += itemPrice;
-          lineItems.push({
-            item: key,
-            description: config.description,
-            quantity: quantity,
-            unitPrice: config.price,
-            total: parseFloat(itemPrice.toFixed(2)),
-          });
-        }
-      }
+  async findAll(category?: string) {
+    const filter: Record<string, unknown> = {};
+    if (category) {
+      filter.category = category;
     }
+    return this.quoteModel.find(filter).sort({ createdAt: -1 }).lean().exec();
+  }
 
-    return {
-      lineItems,
-      totalPrice: parseFloat(totalPrice.toFixed(2)), // Round final price to 2 decimal places
-    };
+  async findById(id: string) {
+    return this.quoteModel.findById(id).lean().exec();
+  }
+
+  async updateById(id: string, update: UpdateQuoteDto) {
+    const updateDoc: Record<string, unknown> = {};
+    if (update.category !== undefined) updateDoc.category = update.category;
+    if (update.data !== undefined) updateDoc.data = update.data;
+    return this.quoteModel
+      .findByIdAndUpdate(id, updateDoc, { new: true })
+      .lean()
+      .exec();
   }
 }
