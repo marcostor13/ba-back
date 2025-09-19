@@ -9,6 +9,7 @@ import { RoleModule } from './modules/role/role.module';
 import { CustomerModule } from './modules/customer/customer.module';
 import { QuoteModule } from './modules/quote/quote.module';
 import { AudioModule } from './modules/audio/audio.module';
+import { UploadModule } from './modules/upload/upload.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -21,6 +22,7 @@ import { AudioModule } from './modules/audio/audio.module';
     CustomerModule,
     QuoteModule,
     AudioModule,
+    UploadModule,
   ],
   controllers: [AppController],
   providers: [AppService],
