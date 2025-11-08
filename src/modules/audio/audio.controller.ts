@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AudioService } from './audio.service';
+import * as path from 'path';
 
 @Controller('audio')
 export class AudioController {
@@ -18,10 +19,19 @@ export class AudioController {
     @HttpCode(HttpStatus.OK)
     @UseInterceptors(FileInterceptor('audio'))
     async summarizeAudio(@UploadedFile() file: Express.Multer.File) {
+        // Log de entrada
+        console.log('[AudioController] POST /audio/summarize llamado');
+
         // Validar que el archivo existe
         if (!file) {
+            console.error('[AudioController] No se ha proporcionado ningún archivo de audio');
             throw new BadRequestException('No se ha proporcionado ningún archivo de audio');
         }
+
+        const extension = path.extname(file.originalname || '').toLowerCase();
+        console.log(
+            `[AudioController] Archivo recibido: name=${file.originalname}, mime=${file.mimetype}, ext=${extension}, size=${file.size} bytes`
+        );
 
         // Validar que es un archivo de audio
         const allowedMimeTypes = [
@@ -35,6 +45,9 @@ export class AudioController {
         ];
 
         if (!allowedMimeTypes.includes(file.mimetype)) {
+            console.error(
+                `[AudioController] MIME no válido: mime=${file.mimetype}, name=${file.originalname}, ext=${extension}`
+            );
             throw new BadRequestException(
                 'El archivo debe ser un formato de audio válido (mp3, wav, m4a, ogg, webm, mp4)'
             );
@@ -43,6 +56,9 @@ export class AudioController {
         // Validar tamaño del archivo (máximo 25MB para OpenAI Whisper)
         const maxSizeInBytes = 25 * 1024 * 1024; // 25MB
         if (file.size > maxSizeInBytes) {
+            console.error(
+                `[AudioController] Archivo demasiado grande: size=${file.size} bytes, max=${maxSizeInBytes} bytes, name=${file.originalname}`
+            );
             throw new BadRequestException(
                 'El archivo de audio no puede superar los 25MB'
             );
@@ -56,8 +72,9 @@ export class AudioController {
                 message: 'Audio procesado y resumido exitosamente',
             };
         } catch (error) {
+            console.error('[AudioController] Error al procesar el audio:', error);
             throw new BadRequestException(
-                `Error al procesar el audio: ${error.message}`
+                `Error al procesar el audio: ${error?.message}`
             );
         }
     }

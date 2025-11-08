@@ -1,38 +1,35 @@
-import { IsOptional, IsString, IsObject, IsNumber, ValidateNested } from 'class-validator';
+import { IsNotEmpty, IsNumber, IsObject, IsOptional, IsString, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { CreateKitchenQuoteDto } from './create-quote.dto';
 
-export class UpdateQuoteDto {
-    @IsString()
-    @IsOptional()
-    category?: string;
-
-    @IsOptional()
+export class CreateKitchenQuoteRequestDto {
     @IsObject()
-    customer?: Record<string, unknown>;
+    @IsNotEmpty()
+    customer: Record<string, unknown>;
 
-    @IsOptional()
     @IsObject()
-    company?: Record<string, unknown>;
+    @IsNotEmpty()
+    company: Record<string, unknown>;
 
-    @IsOptional()
     @ValidateNested()
+    @IsOptional()
     @Type(() => CreateKitchenQuoteDto)
     kitchenInformation?: CreateKitchenQuoteDto;
 
     @IsOptional()
     materials?: unknown;
 
-    @IsOptional()
     @IsString()
-    experience?: string;
+    experience: string;
 
-    @IsOptional()
     @IsNumber()
+    @IsOptional()
     totalPrice?: number;
 
-    @IsOptional()
     @ValidateNested()
+    @IsOptional()
     @Type(() => CreateKitchenQuoteDto)
     formData?: CreateKitchenQuoteDto;
 }
+
+

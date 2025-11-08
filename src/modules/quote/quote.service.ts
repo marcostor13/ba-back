@@ -1,8 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { CreateKitchenQuoteDto } from './dto/create-quote.dto';
-import { UpdateQuoteDto } from './dto/update-quote.dto';
+import { CreateKitchenQuoteRequestDto } from './dto/create-kitchen-quote-request.dto';
 import { Quote } from './schemas/quote.schema';
 
 @Injectable()
@@ -11,9 +10,15 @@ export class QuoteService {
     @InjectModel(Quote.name) private readonly quoteModel: Model<Quote>,
   ) { }
 
-  async createKitchenQuote(dto: CreateKitchenQuoteDto) {
+  async createKitchenQuote(dto: CreateKitchenQuoteRequestDto) {
     const created = await this.quoteModel.create({
-      data: dto as unknown as Record<string, unknown>,
+      customer: dto.customer,
+      company: dto.company,
+      kitchenInformation: dto.kitchenInformation,
+      materials: dto.materials,
+      experience: dto.experience,
+      totalPrice: dto.totalPrice,
+      formData: dto.formData,
       category: 'kitchen',
     });
     return created.toObject();
@@ -31,10 +36,19 @@ export class QuoteService {
     return this.quoteModel.findById(id).lean().exec();
   }
 
-  async updateById(id: string, update: UpdateQuoteDto) {
+  async updateById(
+    id: string,
+    update: Partial<CreateKitchenQuoteRequestDto> & { category?: string },
+  ) {
     const updateDoc: Record<string, unknown> = {};
     if (update.category !== undefined) updateDoc.category = update.category;
-    if (update.data !== undefined) updateDoc.data = update.data;
+    if (update.customer !== undefined) updateDoc.customer = update.customer;
+    if (update.company !== undefined) updateDoc.company = update.company;
+    if (update.kitchenInformation !== undefined) updateDoc.kitchenInformation = update.kitchenInformation;
+    if (update.materials !== undefined) updateDoc.materials = update.materials;
+    if (update.experience !== undefined) updateDoc.experience = update.experience;
+    if (update.totalPrice !== undefined) updateDoc.totalPrice = update.totalPrice;
+    if (update.formData !== undefined) updateDoc.formData = update.formData;
     return this.quoteModel
       .findByIdAndUpdate(id, updateDoc, { new: true })
       .lean()

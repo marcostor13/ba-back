@@ -1,34 +1,45 @@
+# --- Configuración ---
 $IMAGE_NAME = 'ba-back'
 $SshUser = "marcostor13"
-$Ec2Host = "192.168.100.29" 
-$RemoteScriptPath = "/home/$SshUser/deploy.sh"
-# $RemoteScriptPath = "/home/$SshUser/deploy.sh"
-# $ImageName = "marcostor13/$IMAGE_NAME"
-# $ContainerName = "ba-back"
-# $HostPort = "3022"
-# $ContainerPort = "3022"
+$Ec2Host = "192.168.100.29"
+
+# 1. (NUEVO) Define la ruta del proyecto en el servidor remoto
+$RemoteProjectPath = "/home/$SshUser" 
+
+$RemoteScriptPath = "./deploy.sh"
+$ImageName = "marcostor13/$IMAGE_NAME"
+$ContainerName = "ba-back"
+$HostPort = "3022"
+$enviromentsFile = ".env_ba"
 
 
-
-Write-Host "BUILDING IMAGE"
+# --- Pasos Locales (Build & Push) ---
+Write-Host "BUILDING IMAGE LOCALLY"
 docker build -t $IMAGE_NAME .
 
 Write-Host "TAGGING IMAGE"
-docker tag $IMAGE_NAME marcostor13/$IMAGE_NAME
+docker tag $IMAGE_NAME "marcostor13/$IMAGE_NAME"
 
-Write-Host "PUSHING IMAGE"
-docker push marcostor13/$IMAGE_NAME
+Write-Host "PUSHING IMAGE TO DOCKER HUB"
+docker push "marcostor13/$IMAGE_NAME"
 
-Write-Host "Conectando a $SshUser@$Ec2Host y ejecutando script remoto '$RemoteScriptPath'..."
-$RemoteCommand = "$RemoteScriptPath $IMAGE_NAME"
+
+# --- Pasos Remotos (SSH & Deploy) ---
+Write-Host "Conectando a $SshUser@$Ec2Host y ejecutando script remoto..."
+
+# 2. (MODIFICADO) El comando ahora incluye 'cd' para moverse al directorio correcto primero.
+#    El '&&' asegura que el script solo se ejecute si el 'cd' fue exitoso.
+$RemoteCommand = "cd $RemoteProjectPath && $RemoteScriptPath $ImageName $ContainerName $HostPort $enviromentsFile"
+
 $SshCommandArgs = @(
     "$SshUser@$Ec2Host",
     $RemoteCommand
 )
 Write-Host "Comando SSH a ejecutar:"
-Write-Host "ssh $SshCommandArgs"
+Write-Host "ssh $SshUser@$Ec2Host ""$RemoteCommand""" # Muestra el comando completo para depuración
 
 
+# Ejecutar el comando SSH
 & ssh $SshCommandArgs
 
 if ($LASTEXITCODE -eq 0) {

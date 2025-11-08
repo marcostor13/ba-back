@@ -1,24 +1,36 @@
-FROM node:20-slim AS build
-WORKDIR /app
-# Actualiza e instala las dependencias del sistema requeridas por Playwright
-# RUN apt-get update && apt-get install -y \
-#     libnss3 \
-#     libatk1.0-0 \
-#     libatk-bridge2.0-0 \
-#     libcups2 \
-#     libxcomposite1 \
-#     libxrandr2 \
-#     libgbm1 \
-#     libasound2 \
-#     libpangocairo-1.0-0 \
-#     libpango-1.0-0 \
-#     libgtk-3-0 \
-#     fonts-liberation \
-#   && rm -rf /var/lib/apt/lists/*
-  
-COPY package*.json .
+# ---- Base Node ----
+# Etapa 1: Construcción de la aplicación
+FROM node:20-alpine AS builder
+WORKDIR /usr/src/app
+
+# Copiar package.json y package-lock.json
+COPY package*.json ./
+
+# Instalar todas las dependencias (incluyendo devDependencies para el build)
 RUN npm install
-# RUN npx playwright install --with-deps
+
+# Copiar el resto de los archivos del proyecto
 COPY . .
+
+# Compilar la aplicación
+RUN npm run build
+
+# ---- Production ----
+# Etapa 2: Creación de la imagen de producción final
+FROM node:20-alpine
+WORKDIR /usr/src/app
+
+# Copiar package.json para instalar solo dependencias de producción
+COPY package*.json ./
+
+# Instalar solo dependencias de producción
+RUN npm install --only=production && npm cache clean --force
+
+# Copiar la aplicación compilada (la carpeta dist) desde la etapa 'builder'
+COPY --from=builder /usr/src/app/dist ./dist
+
+# Exponer el puerto en el que correrá la aplicación
 EXPOSE 3022
-CMD [ "npm", "start" ]
+
+# Comando para iniciar la aplicación en producción
+CMD [ "node", "dist/main" ]

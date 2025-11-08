@@ -1,6 +1,6 @@
 import { Controller, Post, Body, ValidationPipe, Get, Param, Patch, Query } from '@nestjs/common';
 import { QuoteService } from './quote.service';
-import { CreateKitchenQuoteDto } from './dto/create-quote.dto';
+import { CreateKitchenQuoteRequestDto } from './dto/create-kitchen-quote-request.dto';
 import { UpdateQuoteDto } from './dto/update-quote.dto';
 
 @Controller('quote')
@@ -10,9 +10,9 @@ export class QuoteController {
   @Post('kitchen')
   async createQuote(
     @Body(new ValidationPipe({ transform: true, whitelist: true }))
-    createQuoteDto: CreateKitchenQuoteDto,
+    body: CreateKitchenQuoteRequestDto,
   ) {
-    return this.quoteService.createKitchenQuote(createQuoteDto);
+    return this.quoteService.createKitchenQuote(body);
   }
 
   @Get()
