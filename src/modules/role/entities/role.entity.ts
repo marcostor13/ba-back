@@ -1,9 +1,9 @@
 import { Prop, Schema, SchemaFactory } from "@nestjs/mongoose";
-import { Types } from "mongoose";
+import { Types, Schema as MongooseSchema } from "mongoose";
 
 export interface RoleDocument {
     name: string
-    userId: string
+    userId: Types.ObjectId
 }
 
 export interface GetRoleDocument extends RoleDocument {
@@ -17,8 +17,8 @@ export class Role {
     @Prop()
     name: string
 
-    @Prop()
-    userId: string
+    @Prop({ type: MongooseSchema.Types.ObjectId, required: true })
+    userId: MongooseSchema.Types.ObjectId
 
     @Prop({ default: true })
     active: boolean

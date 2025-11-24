@@ -8,10 +8,15 @@ import {
   BadRequestException,
   Delete,
   Param,
-  FileTypeValidator
+  FileTypeValidator,
+  Body,
+  ValidationPipe,
 } from '@nestjs/common';
 import { UploadService } from './upload.service';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { GeneratePresignedUrlDto } from './dto/generate-presigned-url.dto';
+
+const validationPipe = new ValidationPipe({ transform: true, whitelist: true });
 
 @Controller('upload')
 export class UploadController {
@@ -44,6 +49,13 @@ export class UploadController {
     return this.uploadService.deleteFile(key);
   }
 
-
-
+  @Post('presigned-url')
+  async generatePresignedUrl(
+    @Body(validationPipe) dto: GeneratePresignedUrlDto,
+  ): Promise<{ presignedUrl: string; publicUrl: string; key: string }> {
+    return this.uploadService.generatePresignedUrl(
+      dto.fileName,
+      dto.contentType,
+    );
+  }
 }

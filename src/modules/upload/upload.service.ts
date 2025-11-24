@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { DeleteObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { ConfigService } from '@nestjs/config';
 
 @Injectable()
@@ -115,6 +116,48 @@ export class UploadService {
       return { message: `Archivo ${key} eliminado exitosamente.` };
     } catch (error) {
       throw new Error(`Error al eliminar el archivo de S3: ${error.message}`);
+    }
+  }
+
+  /**
+   * Genera una URL presignada para subir un archivo directamente a S3
+   * @param fileName Nombre del archivo (puede incluir ruta)
+   * @param contentType Tipo MIME del archivo (opcional)
+   * @param expiresIn Tiempo de expiración en segundos (default: 3600 = 1 hora)
+   * @returns URL presignada y la URL pública final del archivo
+   */
+  async generatePresignedUrl(
+    fileName: string,
+    contentType?: string,
+    expiresIn: number = 3600,
+  ): Promise<{ presignedUrl: string; publicUrl: string; key: string }> {
+    const bucketName = this.getBucketName();
+    
+    // Generar un nombre único para el archivo
+    const timestamp = Date.now();
+    const sanitizedFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const key = `${timestamp}-${sanitizedFileName}`;
+
+    const command = new PutObjectCommand({
+      Bucket: bucketName,
+      Key: key,
+      ContentType: contentType || 'application/octet-stream',
+    });
+
+    try {
+      const presignedUrl = await getSignedUrl(this.s3Client, command, {
+        expiresIn,
+      });
+
+      const publicUrl = this.buildPublicUrl(bucketName, key);
+
+      return {
+        presignedUrl,
+        publicUrl,
+        key,
+      };
+    } catch (error) {
+      throw new Error(`Error al generar la URL presignada: ${error.message}`);
     }
   }
 }

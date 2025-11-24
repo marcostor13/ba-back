@@ -2,6 +2,8 @@ import { Controller, Post, UseGuards, Request, HttpCode, HttpStatus, Get, Req, B
 import { AuthService } from './auth.service';
 import { AuthGuard } from '@nestjs/passport';
 import { RegisterDto } from './dto/register.dto';
+import { RequestPasswordResetDto } from './dto/request-password-reset.dto';
+import { ConfirmPasswordResetDto } from './dto/confirm-password-reset.dto';
 @Controller('auth')
 export class AuthController {
     constructor(private authService: AuthService) { }
@@ -49,5 +51,15 @@ export class AuthController {
     @Post('refresh-token')
     async refreshToken(@Body() userData: any) {
         return this.authService.refreshToken(userData);
+    }
+
+    @Post('password-reset/request')
+    async requestPasswordReset(@Body() requestPasswordResetDto: RequestPasswordResetDto) {
+        return this.authService.requestPasswordReset(requestPasswordResetDto);
+    }
+
+    @Post('password-reset/confirm')
+    async confirmPasswordReset(@Body() confirmPasswordResetDto: ConfirmPasswordResetDto) {
+        return this.authService.confirmPasswordReset(confirmPasswordResetDto);
     }
 }

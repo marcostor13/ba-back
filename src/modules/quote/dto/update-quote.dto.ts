@@ -1,38 +1,115 @@
-import { IsOptional, IsString, IsObject, IsNumber, ValidateNested } from 'class-validator';
+import {
+  IsOptional,
+  IsString,
+  IsObject,
+  IsNumber,
+  IsMongoId,
+  IsEnum,
+  IsArray,
+  ValidateNested,
+  IsNotEmpty,
+} from 'class-validator';
 import { Type } from 'class-transformer';
-import { CreateKitchenQuoteDto } from './create-quote.dto';
+import { QuoteCategory, QuoteStatus } from '../schemas/quote.schema';
+import {
+  KitchenInformation,
+  BathroomInformation,
+  BasementInformation,
+  AdditionalWorkInformation,
+} from '../types/form-information.types';
+
+class MaterialItemDto {
+  @IsNumber()
+  @IsNotEmpty()
+  quantity: number;
+
+  @IsString()
+  @IsNotEmpty()
+  description: string;
+}
+
+class MaterialsDto {
+  @IsString()
+  @IsOptional()
+  file?: string;
+
+  @IsArray()
+  @IsOptional()
+  @ValidateNested({ each: true })
+  @Type(() => MaterialItemDto)
+  items?: MaterialItemDto[];
+}
 
 export class UpdateQuoteDto {
-    @IsString()
-    @IsOptional()
-    category?: string;
+  @IsMongoId()
+  @IsOptional()
+  customerId?: string;
 
-    @IsOptional()
-    @IsObject()
-    customer?: Record<string, unknown>;
+  @IsMongoId()
+  @IsOptional()
+  companyId?: string;
 
-    @IsOptional()
-    @IsObject()
-    company?: Record<string, unknown>;
+  @IsMongoId()
+  @IsOptional()
+  projectId?: string;
 
-    @IsOptional()
-    @ValidateNested()
-    @Type(() => CreateKitchenQuoteDto)
-    kitchenInformation?: CreateKitchenQuoteDto;
+  @IsString()
+  @IsOptional()
+  experience?: string;
 
-    @IsOptional()
-    materials?: unknown;
+  @IsEnum(QuoteCategory)
+  @IsOptional()
+  category?: QuoteCategory;
 
-    @IsOptional()
-    @IsString()
-    experience?: string;
+  @IsMongoId()
+  @IsOptional()
+  userId?: string;
 
-    @IsOptional()
-    @IsNumber()
-    totalPrice?: number;
+  @IsNumber()
+  @IsOptional()
+  versionNumber?: number;
 
-    @IsOptional()
-    @ValidateNested()
-    @Type(() => CreateKitchenQuoteDto)
-    formData?: CreateKitchenQuoteDto;
+  @IsObject()
+  @IsOptional()
+  kitchenInformation?: KitchenInformation;
+
+  @IsObject()
+  @IsOptional()
+  bathroomInformation?: BathroomInformation;
+
+  @IsObject()
+  @IsOptional()
+  basementInformation?: BasementInformation;
+
+  @IsObject()
+  @IsOptional()
+  additionalWorkInformation?: AdditionalWorkInformation;
+
+  @IsNumber()
+  @IsOptional()
+  totalPrice?: number;
+
+  @IsEnum(QuoteStatus)
+  @IsOptional()
+  status?: QuoteStatus;
+
+  @IsString()
+  @IsOptional()
+  notes?: string;
+
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  countertopsFiles?: string[];
+
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  backsplashFiles?: string[];
+
+  @IsObject()
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => MaterialsDto)
+  materials?: MaterialsDto;
 }

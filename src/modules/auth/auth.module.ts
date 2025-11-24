@@ -8,6 +8,7 @@ import { LocalStrategy } from './strategies/local.strategy';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { AuthController } from './auth.controller';
 import { RoleModule } from '../role/role.module';
+import { MailModule } from '../mail/mail.module';
 @Module({
   imports: [
     UsersModule,
@@ -16,7 +17,8 @@ import { RoleModule } from '../role/role.module';
       secret: jwtConstants.secret,
       signOptions: { expiresIn: '24h' },
     }),
-    RoleModule
+    RoleModule,
+    MailModule,
   ],
   providers: [AuthService, LocalStrategy, JwtStrategy],
   controllers: [AuthController],

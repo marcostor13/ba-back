@@ -10,6 +10,12 @@ import { CustomerModule } from './modules/customer/customer.module';
 import { QuoteModule } from './modules/quote/quote.module';
 import { AudioModule } from './modules/audio/audio.module';
 import { UploadModule } from './modules/upload/upload.module';
+import { CompanyModule } from './modules/company/company.module';
+import { ProjectModule } from './modules/project/project.module';
+import { PaymentModule } from './modules/payment/payment.module';
+import { InvoiceModule } from './modules/invoice/invoice.module';
+import { KpiModule } from './modules/kpi/kpi.module';
+
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -19,12 +25,17 @@ import { UploadModule } from './modules/upload/upload.module';
     AuthModule,
     UsersModule,
     RoleModule,
+    CompanyModule,
     CustomerModule,
     QuoteModule,
+    ProjectModule,
+    PaymentModule,
+    InvoiceModule,
+    KpiModule,
     AudioModule,
     UploadModule,
   ],
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule { }
+export class AppModule {}
