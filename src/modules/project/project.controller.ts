@@ -18,7 +18,7 @@ const validationPipe = new ValidationPipe({ transform: true, whitelist: true });
 
 @Controller('project')
 export class ProjectController {
-  constructor(private readonly projectService: ProjectService) {}
+  constructor(private readonly projectService: ProjectService) { }
 
   @Post()
   async create(@Body(validationPipe) createProjectDto: CreateProjectDto): Promise<Project> {

@@ -15,6 +15,7 @@ import { ProjectModule } from './modules/project/project.module';
 import { PaymentModule } from './modules/payment/payment.module';
 import { InvoiceModule } from './modules/invoice/invoice.module';
 import { KpiModule } from './modules/kpi/kpi.module';
+import { LogModule } from './modules/log/log.module';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { KpiModule } from './modules/kpi/kpi.module';
     KpiModule,
     AudioModule,
     UploadModule,
+    LogModule,
   ],
   controllers: [AppController],
   providers: [AppService],

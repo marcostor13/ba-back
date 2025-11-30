@@ -18,7 +18,8 @@ Esta documentación describe todos los endpoints disponibles en la API del proye
 8. [KPIs](#kpis)
 9. [Subida de Archivos](#subida-de-archivos)
 10. [Audio](#audio)
-11. [General](#general)
+11. [Logs](#logs)
+12. [General](#general)
 
 ---
 
@@ -1315,6 +1316,444 @@ Procesa un archivo de audio y genera un resumen usando OpenAI Whisper.
 
 ---
 
+## Logs
+
+El módulo de logs permite registrar y consultar notificaciones y errores de la plataforma. Los logs pueden estar asociados a compañías y usuarios, y permiten un seguimiento detallado de eventos del sistema.
+
+### POST `/log`
+
+Crea un nuevo log (notificación o error) en el sistema.
+
+**Autenticación**: No especificada
+
+**Body**:
+
+```json
+{
+  "type": "notification | error (requerido)",
+  "severity": "low | medium | high | critical (opcional, requerido si type es error)",
+  "message": "string (requerido, máximo 500 caracteres)",
+  "description": "string (opcional, máximo 2000 caracteres)",
+  "companyId": "string (opcional, MongoDB ObjectId)",
+  "userId": "string (opcional, MongoDB ObjectId)",
+  "source": "string (opcional, origen del log)",
+  "stackTrace": "string (opcional, stack trace para errores)",
+  "metadata": "object (opcional, datos adicionales)",
+  "endpoint": "string (opcional, endpoint HTTP relacionado)",
+  "method": "string (opcional, método HTTP)",
+  "statusCode": "number (opcional, código de estado HTTP)",
+  "ipAddress": "string (opcional)",
+  "userAgent": "string (opcional)",
+  "resolved": "boolean (opcional, default: false)",
+  "resolvedAt": "Date (opcional)",
+  "resolvedBy": "string (opcional, MongoDB ObjectId)"
+}
+```
+
+**Ejemplo de log de error**:
+
+```json
+{
+  "type": "error",
+  "severity": "high",
+  "message": "Error al procesar pago",
+  "description": "Fallo en la conexión con el proveedor de pagos",
+  "companyId": "507f1f77bcf86cd799439011",
+  "source": "payment-service",
+  "stackTrace": "Error: Connection timeout\n    at PaymentService.processPayment...",
+  "metadata": {
+    "paymentId": "123",
+    "amount": 1000,
+    "customerId": "507f1f77bcf86cd799439013"
+  },
+  "endpoint": "/payment/create-intent",
+  "method": "POST",
+  "statusCode": 500,
+  "ipAddress": "192.168.1.1",
+  "userAgent": "Mozilla/5.0..."
+}
+```
+
+**Ejemplo de notificación**:
+
+```json
+{
+  "type": "notification",
+  "message": "Cotización aprobada",
+  "description": "La cotización #123 ha sido aprobada por el cliente",
+  "companyId": "507f1f77bcf86cd799439011",
+  "userId": "507f1f77bcf86cd799439012",
+  "source": "quote-service",
+  "metadata": {
+    "quoteId": "507f1f77bcf86cd799439014",
+    "projectId": "507f1f77bcf86cd799439015"
+  }
+}
+```
+
+**Respuesta exitosa** (201):
+
+```json
+{
+  "_id": "log_id",
+  "type": "error",
+  "severity": "high",
+  "message": "Error al procesar pago",
+  "description": "Fallo en la conexión con el proveedor de pagos",
+  "companyId": "507f1f77bcf86cd799439011",
+  "source": "payment-service",
+  "resolved": false,
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}
+```
+
+---
+
+### GET `/log`
+
+Obtiene todos los logs con filtros opcionales.
+
+**Autenticación**: No especificada
+
+**Query Parameters**:
+
+- `type` (string, opcional): Filtrar por tipo (`notification` o `error`)
+- `severity` (string, opcional): Filtrar por severidad (`low`, `medium`, `high`, `critical`)
+- `companyId` (string, opcional): Filtrar por compañía
+- `userId` (string, opcional): Filtrar por usuario
+- `source` (string, opcional): Filtrar por origen
+- `resolved` (string, opcional): Filtrar por estado de resolución (`true` o `false`)
+- `startDate` (string, opcional): Fecha de inicio (formato ISO 8601)
+- `endDate` (string, opcional): Fecha de fin (formato ISO 8601)
+- `limit` (number, opcional): Límite de resultados (default: 100)
+- `skip` (number, opcional): Número de resultados a omitir (default: 0)
+
+**Ejemplo**:
+
+```
+GET /log?type=error&severity=critical&companyId=507f1f77bcf86cd799439011&resolved=false&limit=50
+```
+
+**Respuesta exitosa** (200):
+
+```json
+[
+  {
+    "_id": "log_id",
+    "type": "error",
+    "severity": "critical",
+    "message": "Error crítico en el sistema",
+    "companyId": "507f1f77bcf86cd799439011",
+    "resolved": false,
+    "createdAt": "2024-01-01T00:00:00.000Z",
+    ...
+  }
+]
+```
+
+---
+
+### GET `/log/errors`
+
+Obtiene solo los logs de tipo error con filtros opcionales.
+
+**Autenticación**: No especificada
+
+**Query Parameters**:
+
+- `severity` (string, opcional): Filtrar por severidad
+- `companyId` (string, opcional): Filtrar por compañía
+- `userId` (string, opcional): Filtrar por usuario
+- `source` (string, opcional): Filtrar por origen
+- `resolved` (string, opcional): Filtrar por estado de resolución
+- `limit` (number, opcional): Límite de resultados
+- `skip` (number, opcional): Número de resultados a omitir
+
+**Ejemplo**:
+
+```
+GET /log/errors?severity=high&resolved=false&limit=20
+```
+
+---
+
+### GET `/log/notifications`
+
+Obtiene solo los logs de tipo notificación con filtros opcionales.
+
+**Autenticación**: No especificada
+
+**Query Parameters**:
+
+- `companyId` (string, opcional): Filtrar por compañía
+- `userId` (string, opcional): Filtrar por usuario
+- `source` (string, opcional): Filtrar por origen
+- `limit` (number, opcional): Límite de resultados
+- `skip` (number, opcional): Número de resultados a omitir
+
+**Ejemplo**:
+
+```
+GET /log/notifications?companyId=507f1f77bcf86cd799439011&limit=50
+```
+
+---
+
+### GET `/log/unresolved-errors`
+
+Obtiene solo los errores que no han sido resueltos.
+
+**Autenticación**: No especificada
+
+**Query Parameters**:
+
+- `severity` (string, opcional): Filtrar por severidad
+- `companyId` (string, opcional): Filtrar por compañía
+- `userId` (string, opcional): Filtrar por usuario
+- `source` (string, opcional): Filtrar por origen
+- `limit` (number, opcional): Límite de resultados
+- `skip` (number, opcional): Número de resultados a omitir
+
+**Ejemplo**:
+
+```
+GET /log/unresolved-errors?severity=critical&companyId=507f1f77bcf86cd799439011
+```
+
+**Respuesta exitosa** (200):
+
+```json
+[
+  {
+    "_id": "log_id",
+    "type": "error",
+    "severity": "critical",
+    "message": "Error crítico en el sistema",
+    "resolved": false,
+    "createdAt": "2024-01-01T00:00:00.000Z",
+    ...
+  }
+]
+```
+
+---
+
+### GET `/log/stats`
+
+Obtiene estadísticas agregadas de los logs.
+
+**Autenticación**: No especificada
+
+**Query Parameters**:
+
+- `companyId` (string, opcional): Filtrar estadísticas por compañía
+- `startDate` (string, opcional): Fecha de inicio (formato ISO 8601)
+- `endDate` (string, opcional): Fecha de fin (formato ISO 8601)
+
+**Ejemplo**:
+
+```
+GET /log/stats?companyId=507f1f77bcf86cd799439011&startDate=2024-01-01&endDate=2024-01-31
+```
+
+**Respuesta exitosa** (200):
+
+```json
+{
+  "total": 150,
+  "errors": 45,
+  "notifications": 105,
+  "bySeverity": {
+    "low": 10,
+    "medium": 15,
+    "high": 15,
+    "critical": 5
+  },
+  "unresolved": 12
+}
+```
+
+---
+
+### GET `/log/company/:companyId`
+
+Obtiene todos los logs de una compañía específica.
+
+**Autenticación**: No especificada
+
+**Parámetros**:
+
+- `companyId` (string, requerido): ID de la compañía
+
+**Query Parameters**:
+
+- `type` (string, opcional): Filtrar por tipo
+- `severity` (string, opcional): Filtrar por severidad
+- `limit` (number, opcional): Límite de resultados
+- `skip` (number, opcional): Número de resultados a omitir
+
+**Ejemplo**:
+
+```
+GET /log/company/507f1f77bcf86cd799439011?type=error&severity=high
+```
+
+---
+
+### GET `/log/user/:userId`
+
+Obtiene todos los logs de un usuario específico.
+
+**Autenticación**: No especificada
+
+**Parámetros**:
+
+- `userId` (string, requerido): ID del usuario
+
+**Query Parameters**:
+
+- `type` (string, opcional): Filtrar por tipo
+- `severity` (string, opcional): Filtrar por severidad
+- `limit` (number, opcional): Límite de resultados
+- `skip` (number, opcional): Número de resultados a omitir
+
+**Ejemplo**:
+
+```
+GET /log/user/507f1f77bcf86cd799439012?type=notification
+```
+
+---
+
+### GET `/log/:id`
+
+Obtiene un log específico por su ID.
+
+**Autenticación**: No especificada
+
+**Parámetros**:
+
+- `id` (string, requerido): ID del log
+
+**Respuesta exitosa** (200):
+
+```json
+{
+  "_id": "log_id",
+  "type": "error",
+  "severity": "high",
+  "message": "Error al procesar pago",
+  "description": "Fallo en la conexión con el proveedor de pagos",
+  "companyId": "507f1f77bcf86cd799439011",
+  "userId": "507f1f77bcf86cd799439012",
+  "source": "payment-service",
+  "stackTrace": "Error: Connection timeout...",
+  "metadata": {
+    "paymentId": "123",
+    "amount": 1000
+  },
+  "endpoint": "/payment/create-intent",
+  "method": "POST",
+  "statusCode": 500,
+  "ipAddress": "192.168.1.1",
+  "userAgent": "Mozilla/5.0...",
+  "resolved": false,
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}
+```
+
+---
+
+### PATCH `/log/:id`
+
+Actualiza un log existente.
+
+**Autenticación**: No especificada
+
+**Parámetros**:
+
+- `id` (string, requerido): ID del log
+
+**Body**: Todos los campos son opcionales (mismo formato que POST `/log`)
+
+**Ejemplo**:
+
+```json
+{
+  "resolved": true,
+  "description": "Error resuelto mediante reinicio del servicio"
+}
+```
+
+**Nota**: Si se establece `resolved: true` sin especificar `resolvedAt`, se establece automáticamente la fecha actual.
+
+---
+
+### PATCH `/log/:id/resolve`
+
+Marca un log como resuelto. Endpoint específico para resolver logs de manera rápida.
+
+**Autenticación**: No especificada
+
+**Parámetros**:
+
+- `id` (string, requerido): ID del log
+
+**Body**:
+
+```json
+{
+  "resolvedBy": "string (opcional, MongoDB ObjectId del usuario que resuelve)"
+}
+```
+
+**Ejemplo**:
+
+```json
+{
+  "resolvedBy": "507f1f77bcf86cd799439012"
+}
+```
+
+**Respuesta exitosa** (200):
+
+```json
+{
+  "_id": "log_id",
+  "resolved": true,
+  "resolvedAt": "2024-01-01T12:00:00.000Z",
+  "resolvedBy": "507f1f77bcf86cd799439012",
+  ...
+}
+```
+
+---
+
+### DELETE `/log/:id`
+
+Elimina un log del sistema.
+
+**Autenticación**: No especificada
+
+**Parámetros**:
+
+- `id` (string, requerido): ID del log
+
+**Respuesta exitosa** (200):
+
+```json
+{
+  "_id": "log_id",
+  "type": "error",
+  "message": "Error al procesar pago",
+  ...
+}
+```
+
+---
+
 ## General
 
 ### GET `/`
@@ -1635,4 +2074,4 @@ Obtiene el historial de pagos de una factura específica.
 
 ---
 
-**Última actualización**: 23 de Noviembre de 2025
+**Última actualización**: 12 de Diciembre de 2025

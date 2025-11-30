@@ -1,0 +1,55 @@
+{
+  "version": "1.0.0",
+  "description": "Categorías que no deben mostrar título de sección porque son redundantes con los labels de los campos",
+  "categoriesToHideTitle": [
+    {
+      "category": "subfloor",
+      "file": "inputs.json",
+      "reason": "Categoría pequeña (3 campos) donde el primer campo \"Basement Finished\" es muy descriptivo y podría estar siendo usado como título."
+    },
+    {
+      "category": "demolition",
+      "file": "inputs.json",
+      "reason": "El título de categoría \"Demolition\" coincide exactamente con el label \"Demolition\""
+    },
+    {
+      "category": "framing",
+      "file": "inputs.json",
+      "reason": "Categoría pequeña (2 campos) donde el primer campo \"Frame New Wall\" es muy descriptivo y podría estar siendo usado como título."
+    },
+    {
+      "category": "shelving",
+      "file": "inputs.json",
+      "reason": "Categoría pequeña (3 campos) donde el primer campo \"Glass Shelves 12 Inch\" es muy descriptivo y podría estar siendo usado como título."
+    },
+    {
+      "category": "counteropTemplateFee",
+      "file": "inputs.json",
+      "reason": "Categoría con un solo campo. El label \"Countertop Template Fee\" ya es descriptivo."
+    },
+    {
+      "category": "cutouts",
+      "file": "inputs.json",
+      "reason": "Categoría pequeña (3 campos) donde el primer campo \"Sink And Faucet Cutout\" es muy descriptivo y podría estar siendo usado como título."
+    },
+    {
+      "category": "stoneBacksplashTemplateFee",
+      "file": "inputs.json",
+      "reason": "Categoría con un solo campo. El label \"Stone Backsplash Template Fee\" ya es descriptivo."
+    },
+    {
+      "category": "sewer",
+      "file": "inputs_additional_work.json",
+      "reason": "Categoría pequeña (2 campos) donde el primer campo \"Sump pump (concrete, electric, plumbing)\" es muy descriptivo y podría estar siendo usado como título."
+    },
+    {
+      "category": "additionalWorks",
+      "file": "inputs_additional_work.json",
+      "reason": "Categoría pequeña (2 campos) donde el primer campo \"Gas pipes\" es muy descriptivo y podría estar siendo usado como título."
+    }
+  ],
+  "metadata": {
+    "generatedAt": "2025-11-25T21:03:14.503Z",
+    "totalCategories": 9
+  }
+}
