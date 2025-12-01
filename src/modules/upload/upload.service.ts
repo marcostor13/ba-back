@@ -145,7 +145,7 @@ export class UploadService {
     });
 
     try {
-      const presignedUrl = await getSignedUrl(this.s3Client, command, {
+      const presignedUrl = await getSignedUrl(this.s3Client as any, command as any, {
         expiresIn,
       });
 
