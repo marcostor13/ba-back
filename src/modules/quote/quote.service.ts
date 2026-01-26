@@ -3,11 +3,15 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { CreateQuoteRequestDto } from './dto/create-quote-request.dto';
 import { UpdateQuoteDto } from './dto/update-quote.dto';
+import { RejectQuoteDto } from './dto/reject-quote.dto';
+import { ApproveQuoteDto } from './dto/approve-quote.dto';
+import { SendQuoteDto } from './dto/send-quote.dto';
 import { Quote, QuoteStatus, QuoteCategory } from './schemas/quote.schema';
 import { Project } from '../project/schemas/project.schema';
 import { Customer } from '../customer/entities/customer.entity';
 import { Company } from '../company/schemas/company.schema';
 import { MailService } from '../mail/mail.service';
+import { StatusHistoryService } from '../status-history/status-history.service';
 import * as PDFDocument from 'pdfkit';
 
 @Injectable()
@@ -20,6 +24,7 @@ export class QuoteService {
     @InjectModel(Customer.name) private readonly customerModel: Model<Customer>,
     @InjectModel(Company.name) private readonly companyModel: Model<Company>,
     private readonly mailService: MailService,
+    private readonly statusHistoryService: StatusHistoryService,
   ) { }
 
   async create(dto: CreateQuoteRequestDto): Promise<Quote> {
@@ -61,6 +66,15 @@ export class QuoteService {
 
     const created = await this.quoteModel.create(quoteData);
     const quote = created.toObject() as Quote;
+
+    // Record initial status
+    await this.statusHistoryService.recordTransition({
+      entityId: created._id.toString(),
+      entityType: 'quote',
+      toStatus: quote.status,
+      userId: dto.userId,
+      companyId: dto.companyId,
+    });
 
     // Enviar email con PDF adjunto de forma asíncrona (no bloquear la respuesta)
     void this.sendQuoteCreatedEmail(quote, created._id.toString(), project).catch((error) => {
@@ -692,6 +706,25 @@ export class QuoteService {
       .exec() as Promise<Quote[]>;
   }
 
+  private validateStatusTransition(fromStatus: QuoteStatus, toStatus: QuoteStatus): void {
+    const validTransitions: Record<QuoteStatus, QuoteStatus[]> = {
+      [QuoteStatus.DRAFT]: [QuoteStatus.PENDING, QuoteStatus.SENT],
+      [QuoteStatus.PENDING]: [QuoteStatus.APPROVED, QuoteStatus.REJECTED],
+      [QuoteStatus.APPROVED]: [QuoteStatus.SENT, QuoteStatus.IN_PROGRESS],
+      [QuoteStatus.SENT]: [QuoteStatus.APPROVED, QuoteStatus.REJECTED, QuoteStatus.IN_PROGRESS],
+      [QuoteStatus.REJECTED]: [QuoteStatus.DRAFT, QuoteStatus.PENDING],
+      [QuoteStatus.IN_PROGRESS]: [QuoteStatus.COMPLETED],
+      [QuoteStatus.COMPLETED]: [],
+    };
+
+    const allowedTransitions = validTransitions[fromStatus] || [];
+    if (!allowedTransitions.includes(toStatus)) {
+      throw new BadRequestException(
+        `Invalid status transition from ${fromStatus} to ${toStatus}. Allowed transitions: ${allowedTransitions.join(', ')}`,
+      );
+    }
+  }
+
   async update(id: string, updateDto: UpdateQuoteDto): Promise<Quote> {
     if (!Types.ObjectId.isValid(id)) {
       throw new BadRequestException('Invalid ID format');
@@ -700,6 +733,27 @@ export class QuoteService {
     const existingQuote = await this.quoteModel.findById(id).exec();
     if (!existingQuote) {
       throw new NotFoundException(`Quote with ID ${id} not found`);
+    }
+
+    // Validar transición de estado si se está cambiando
+    if (updateDto.status !== undefined && updateDto.status !== existingQuote.status) {
+      this.validateStatusTransition(existingQuote.status, updateDto.status);
+
+      // Si se rechaza, validar que rejectionComments.comment esté presente
+      if (updateDto.status === QuoteStatus.REJECTED) {
+        if (!updateDto.rejectionComments?.comment) {
+          throw new BadRequestException(
+            'rejectionComments.comment is required when status is rejected',
+          );
+        }
+      }
+    }
+
+    // Si el estado es rejected y no hay rejectionComments en el DTO, validar que exista
+    if (updateDto.status === QuoteStatus.REJECTED && !updateDto.rejectionComments) {
+      throw new BadRequestException(
+        'rejectionComments is required when status is rejected',
+      );
     }
 
     // Actualizar campos básicos
@@ -724,8 +778,50 @@ export class QuoteService {
     if (updateDto.versionNumber !== undefined) {
       existingQuote.versionNumber = updateDto.versionNumber;
     }
-    if (updateDto.status !== undefined) {
+    if (updateDto.status !== undefined && updateDto.status !== existingQuote.status) {
+      const fromStatus = existingQuote.status;
       existingQuote.status = updateDto.status;
+
+      // Si se rechaza, guardar rejectionComments
+      if (updateDto.status === QuoteStatus.REJECTED && updateDto.rejectionComments) {
+        existingQuote.rejectionComments = {
+          comment: updateDto.rejectionComments.comment,
+          rejectedBy: updateDto.rejectionComments.rejectedBy
+            ? new Types.ObjectId(updateDto.rejectionComments.rejectedBy)
+            : undefined,
+          rejectedAt: new Date(),
+          mediaFiles: updateDto.rejectionComments.mediaFiles || [],
+        } as any;
+      } else if (updateDto.status !== QuoteStatus.REJECTED) {
+        // Limpiar rejectionComments si no está rechazado
+        existingQuote.rejectionComments = null;
+      }
+
+      // Record transition
+      await this.statusHistoryService.recordTransition({
+        entityId: id,
+        entityType: 'quote',
+        fromStatus,
+        toStatus: updateDto.status,
+        userId: updateDto.userId || existingQuote.userId?.toString(),
+        companyId: existingQuote.companyId.toString(),
+      });
+    }
+
+    // Actualizar rejectionComments si se proporciona independientemente del status
+    if (updateDto.rejectionComments !== undefined) {
+      if (updateDto.rejectionComments === null) {
+        existingQuote.rejectionComments = null;
+      } else if (updateDto.rejectionComments.comment) {
+        existingQuote.rejectionComments = {
+          comment: updateDto.rejectionComments.comment,
+          rejectedBy: updateDto.rejectionComments.rejectedBy
+            ? new Types.ObjectId(updateDto.rejectionComments.rejectedBy)
+            : undefined,
+          rejectedAt: existingQuote.rejectionComments?.rejectedAt || new Date(),
+          mediaFiles: updateDto.rejectionComments.mediaFiles || [],
+        } as any;
+      }
     }
     if (updateDto.totalPrice !== undefined) {
       existingQuote.totalPrice = updateDto.totalPrice;
@@ -754,6 +850,108 @@ export class QuoteService {
     if (updateDto.materials !== undefined) {
       existingQuote.materials = updateDto.materials as any;
     }
+
+    await existingQuote.save();
+    return existingQuote.toObject();
+  }
+
+  async approve(id: string, approveDto: ApproveQuoteDto): Promise<Quote> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new BadRequestException('Invalid ID format');
+    }
+
+    const existingQuote = await this.quoteModel.findById(id).exec();
+    if (!existingQuote) {
+      throw new NotFoundException(`Quote with ID ${id} not found`);
+    }
+
+    if (existingQuote.status !== QuoteStatus.PENDING) {
+      throw new BadRequestException(
+        `Quote must be in ${QuoteStatus.PENDING} status to be approved. Current status: ${existingQuote.status}`,
+      );
+    }
+
+    const fromStatus = existingQuote.status;
+    existingQuote.status = QuoteStatus.APPROVED;
+
+    await this.statusHistoryService.recordTransition({
+      entityId: id,
+      entityType: 'quote',
+      fromStatus,
+      toStatus: QuoteStatus.APPROVED,
+      userId: approveDto.approvedBy || existingQuote.userId?.toString(),
+      companyId: existingQuote.companyId.toString(),
+    });
+
+    await existingQuote.save();
+    return existingQuote.toObject();
+  }
+
+  async reject(id: string, rejectDto: RejectQuoteDto): Promise<Quote> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new BadRequestException('Invalid ID format');
+    }
+
+    const existingQuote = await this.quoteModel.findById(id).exec();
+    if (!existingQuote) {
+      throw new NotFoundException(`Quote with ID ${id} not found`);
+    }
+
+    if (existingQuote.status !== QuoteStatus.PENDING) {
+      throw new BadRequestException(
+        `Quote must be in ${QuoteStatus.PENDING} status to be rejected. Current status: ${existingQuote.status}`,
+      );
+    }
+
+    const fromStatus = existingQuote.status;
+    existingQuote.status = QuoteStatus.REJECTED;
+    existingQuote.rejectionComments = {
+      comment: rejectDto.comment,
+      rejectedBy: rejectDto.rejectedBy ? new Types.ObjectId(rejectDto.rejectedBy) : undefined,
+      rejectedAt: new Date(),
+      mediaFiles: rejectDto.mediaFiles || [],
+    } as any;
+
+    await this.statusHistoryService.recordTransition({
+      entityId: id,
+      entityType: 'quote',
+      fromStatus,
+      toStatus: QuoteStatus.REJECTED,
+      userId: rejectDto.rejectedBy || existingQuote.userId?.toString(),
+      companyId: existingQuote.companyId.toString(),
+    });
+
+    await existingQuote.save();
+    return existingQuote.toObject();
+  }
+
+  async send(id: string, sendDto: SendQuoteDto): Promise<Quote> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new BadRequestException('Invalid ID format');
+    }
+
+    const existingQuote = await this.quoteModel.findById(id).exec();
+    if (!existingQuote) {
+      throw new NotFoundException(`Quote with ID ${id} not found`);
+    }
+
+    if (existingQuote.status !== QuoteStatus.APPROVED) {
+      throw new BadRequestException(
+        `Quote must be in ${QuoteStatus.APPROVED} status to be sent. Current status: ${existingQuote.status}`,
+      );
+    }
+
+    const fromStatus = existingQuote.status;
+    existingQuote.status = QuoteStatus.SENT;
+
+    await this.statusHistoryService.recordTransition({
+      entityId: id,
+      entityType: 'quote',
+      fromStatus,
+      toStatus: QuoteStatus.SENT,
+      userId: sendDto.sentBy || existingQuote.userId?.toString(),
+      companyId: existingQuote.companyId.toString(),
+    });
 
     await existingQuote.save();
     return existingQuote.toObject();

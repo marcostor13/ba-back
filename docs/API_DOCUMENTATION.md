@@ -423,6 +423,22 @@ Elimina un cliente del sistema.
 
 **Nota Importante**: Las cotizaciones (quotes/estimaciones) se crean **después** de crear un proyecto. Primero debe existir un proyecto, y luego se pueden crear múltiples estimaciones para ese proyecto.
 
+### Flujo de Aprobación de Estimaciones
+
+El sistema implementa un flujo de aprobación con los siguientes estados y transiciones:
+
+**Estados disponibles**: `draft`, `pending`, `approved`, `sent`, `rejected`, `in_progress`, `completed`
+
+**Flujo de transiciones válidas**:
+- `draft` → `pending` (enviar para revisión) o `sent` (enviar directamente al cliente)
+- `pending` → `approved` (aprobación interna) o `rejected` (rechazo con comentarios obligatorios)
+- `approved` → `sent` (enviar al cliente) o `in_progress` (iniciar proyecto)
+- `sent` → `approved`, `rejected` o `in_progress`
+- `rejected` → `draft` (volver a editar) o `pending` (reenviar para revisión)
+- `in_progress` → `completed`
+
+**Nota sobre rechazos**: Cuando una cotización se rechaza (`status: "rejected"`), el campo `rejectionComments.comment` es **obligatorio** para documentar el motivo del rechazo.
+
 ### POST `/quote`
 
 Crea una nueva cotización/estimación para un proyecto existente (disponible para las categorías `kitchen`, `bathroom`, `basement` y `additional-work`).
@@ -441,8 +457,9 @@ Crea una nueva cotización/estimación para un proyecto existente (disponible pa
   "userId": "string (requerido, MongoDB ObjectId)",
   "versionNumber": "number (requerido)",
   "totalPrice": "number (requerido)",
-  "status": "draft | sent | approved | rejected | in_progress | completed (opcional, default: draft)",
+  "status": "draft | pending | approved | sent | rejected | in_progress | completed (opcional, default: draft)",
   "notes": "string (opcional)",
+  "rejectionComments": "RejectionComments (opcional, requerido si status es rejected)"
   "kitchenInformation": "KitchenInformation (opcional, sólo para category: kitchen)",
   "bathroomInformation": "BathroomInformation (opcional, sólo para category: bathroom)",
   "basementInformation": "BasementInformation (opcional, sólo para category: basement)",
@@ -455,6 +472,16 @@ Crea una nueva cotización/estimación para un proyecto existente (disponible pa
 
 Los objetos `KitchenInformation`, `BathroomInformation`, `BasementInformation` y `AdditionalWorkInformation` utilizan nombres tipados y estandarizados.  
 El formulario de cocina se basa directamente en `docs/inputs.json`, por lo que todos los `name` de ese archivo ahora siguen el formato camelCase y sin números iniciales (por ejemplo: `woodHoodVentThirtySix`, `stackersTwelve`, `paintCeilingTwoCoats`, etc.).
+
+**Campo `rejectionComments`**: Este campo es requerido cuando `status` es `rejected`. Estructura:
+
+```json
+{
+  "comment": "string (requerido si status es rejected)",
+  "rejectedBy": "string (opcional, MongoDB ObjectId del usuario que rechaza)",
+  "mediaFiles": "string[] (opcional, array de URLs de archivos adjuntos)"
+}
+```
 
 **Campo `materials`**: Este campo opcional es un objeto que permite gestionar la lista de materiales de dos formas:
 
@@ -555,7 +582,7 @@ Obtiene todas las cotizaciones, con filtros opcionales.
 - `companyId` (string, opcional): Filtrar por compañía
 - `projectId` (string, opcional): Filtrar por proyecto
 - `category` (string, opcional): Filtrar por categoría (`kitchen`, `bathroom`, `basement`, `additional-work`)
-- `status` (string, opcional): Filtrar por estado (draft, sent, approved, rejected, in_progress, completed)
+- `status` (string, opcional): Filtrar por estado (draft, pending, approved, sent, rejected, in_progress, completed)
 - `userId` (string, opcional): Filtrar por estimador
 
 **Ejemplo**:
@@ -737,6 +764,23 @@ Actualiza una cotización existente (se usa para generar nuevas versiones increm
 
 **Body**: Todos los campos son opcionales, incluyendo `materials` que puede actualizarse como objeto con `file` e `items`.
 
+**Validaciones de transición de estado**:
+- El sistema valida que las transiciones de estado sean válidas según el flujo definido
+- Si se intenta cambiar a `rejected`, el campo `rejectionComments.comment` es obligatorio
+- Si se cambia a un estado diferente de `rejected`, el campo `rejectionComments` se limpia automáticamente
+
+**Ejemplo de actualización con rechazo**:
+```json
+{
+  "status": "rejected",
+  "rejectionComments": {
+    "comment": "El presupuesto excede los límites del cliente",
+    "rejectedBy": "507f1f77bcf86cd799439011",
+    "mediaFiles": ["https://bucket.s3.amazonaws.com/feedback.pdf"]
+  }
+}
+```
+
 **Ejemplo de actualización con materials usando items (ingreso manual)**:
 
 ```json
@@ -785,6 +829,108 @@ Actualiza una cotización existente (se usa para generar nuevas versiones increm
   },
   "versionNumber": 2,
   "status": "sent"
+}
+```
+
+---
+
+### POST `/quote/:id/approve`
+
+Aprueba una cotización que está en estado `pending`. Cambia el estado a `approved`.
+
+**Autenticación**: No especificada
+
+**Parámetros**:
+- `id` (string, requerido): ID de la cotización
+
+**Body**:
+```json
+{
+  "approvedBy": "string (opcional, MongoDB ObjectId del usuario que aprueba)"
+}
+```
+
+**Validaciones**:
+- La cotización debe estar en estado `pending`
+- Si no está en `pending`, se retorna un error 400
+
+**Respuesta exitosa** (200):
+```json
+{
+  "_id": "quote_id",
+  "status": "approved",
+  ...
+}
+```
+
+---
+
+### POST `/quote/:id/reject`
+
+Rechaza una cotización que está en estado `pending`. Cambia el estado a `rejected` y requiere comentarios de rechazo.
+
+**Autenticación**: No especificada
+
+**Parámetros**:
+- `id` (string, requerido): ID de la cotización
+
+**Body**:
+```json
+{
+  "comment": "string (requerido, motivo del rechazo)",
+  "rejectedBy": "string (opcional, MongoDB ObjectId del usuario que rechaza)",
+  "mediaFiles": "string[] (opcional, array de URLs de archivos adjuntos)"
+}
+```
+
+**Validaciones**:
+- La cotización debe estar en estado `pending`
+- El campo `comment` es obligatorio
+- Si no está en `pending`, se retorna un error 400
+
+**Respuesta exitosa** (200):
+```json
+{
+  "_id": "quote_id",
+  "status": "rejected",
+  "rejectionComments": {
+    "comment": "El precio es demasiado alto para el presupuesto del cliente",
+    "rejectedBy": "507f1f77bcf86cd799439011",
+    "rejectedAt": "2024-01-15T10:30:00.000Z",
+    "mediaFiles": []
+  },
+  ...
+}
+```
+
+---
+
+### POST `/quote/:id/send`
+
+Envía una cotización aprobada al cliente. Cambia el estado de `approved` a `sent`.
+
+**Autenticación**: No especificada
+
+**Parámetros**:
+- `id` (string, requerido): ID de la cotización
+
+**Body**:
+```json
+{
+  "sentBy": "string (opcional, MongoDB ObjectId del usuario que envía)"
+}
+```
+
+**Validaciones**:
+- La cotización debe estar en estado `approved`
+- Si no está en `approved`, se retorna un error 400
+
+**Respuesta exitosa** (200):
+```json
+{
+  "_id": "quote_id",
+  "status": "sent",
+  ...
 }
 ```
 
@@ -1036,20 +1182,25 @@ Elimina un pago del sistema.
 
 ## KPIs
 
+El módulo de KPIs proporciona métricas agregadas y datos para dashboards. Todos los endpoints de KPI admiten ahora filtros por compañía, usuario y rango de fechas.
+
 ### GET `/kpi`
 
-Obtiene todos los KPIs consolidados, opcionalmente filtrados por compañía.
+Obtiene todos los KPIs consolidados.
 
 **Autenticación**: No especificada
 
 **Query Parameters**:
 
-- `companyId` (string, opcional): Filtrar KPIs por compañía específica
+- `companyId` (string, opcional): Filtrar KPIs por compañía específica.
+- `userId` (string, opcional): Filtrar por estimador/usuario específico.
+- `startDate` (string, opcional): Fecha de inicio del periodo (ISO 8601).
+- `endDate` (string, opcional): Fecha de fin del periodo (ISO 8601).
 
 **Ejemplo**:
 
 ```
-GET /kpi?companyId=507f1f77bcf86cd799439011
+GET /kpi?companyId=507f1f77bcf86cd799439011&startDate=2024-01-01&endDate=2024-01-31
 ```
 
 **Respuesta exitosa** (200):
@@ -1058,11 +1209,6 @@ GET /kpi?companyId=507f1f77bcf86cd799439011
 {
   "quotes": {
     "total": 150,
-    "byCategory": {
-      "kitchen": 80,
-      "bathroom": 50,
-      "other": 20
-    },
     "byStatus": {
       "draft": 30,
       "sent": 40,
@@ -1086,82 +1232,87 @@ GET /kpi?companyId=507f1f77bcf86cd799439011
   },
   "payments": {
     "total": 120,
-    "byStatus": {
-      "pending": 10,
-      "completed": 100,
-      "failed": 5,
-      "refunded": 5
-    },
     "totalRevenue": 1250000
+  },
+  "invoices": {
+    "total": 20,
+    "byStatus": { "sent": 10, "paid": 10 },
+    "totalBilled": 150000,
+    "totalCollected": 100000,
+    "totalPending": 50000
   }
 }
 ```
 
 ---
 
-### GET `/kpi/quotes`
+### GET `/kpi/sales-dashboard`
 
-Obtiene KPIs específicos de cotizaciones.
-
-**Autenticación**: No especificada
-
-**Query Parameters**:
-
-- `companyId` (string, opcional): Filtrar por compañía
-
----
-
-### GET `/kpi/projects`
-
-Obtiene KPIs específicos de proyectos.
+Endpoint especializado para el Administrador que consolida métricas críticas de ventas, conversión y eficiencia operativa (pipeline, conversión, ticket promedio y tiempos por etapa).
 
 **Autenticación**: No especificada
 
 **Query Parameters**:
 
-- `companyId` (string, opcional): Filtrar por compañía
-
----
-
-### GET `/kpi/payments`
-
-Obtiene KPIs específicos de pagos.
-
-**Autenticación**: No especificada
-
-**Query Parameters**:
-
-- `companyId` (string, opcional): Filtrar por compañía
-
----
-
-### GET `/kpi/invoices`
-
-Obtiene KPIs específicos de facturación.
-
-**Autenticación**: No especificada
-
-**Query Parameters**:
-
-- `companyId` (string, opcional): Filtrar por compañía
+- `companyId` (string, requerido): ID de la compañía.
+- `userId` (string, opcional): Filtrar por estimador.
+- `startDate` (string, opcional): Fecha inicio (ISO 8601).
+- `endDate` (string, opcional): Fecha fin (ISO 8601).
 
 **Respuesta exitosa** (200):
 
 ```json
 {
-  "total": 25,
-  "byStatus": {
-    "draft": 5,
-    "sent": 10,
-    "paid": 10
+  "revenue": 1250000,
+  "pipeline": {
+    "draft": 30,
+    "sent": 40,
+    "approved": 60,
+    "rejected": 10,
+    "in_progress": 8,
+    "completed": 2
   },
-  "financials": {
-    "billed": 150000,
-    "paid": 100000,
-    "pending": 50000
+  "conversionRate": 40.0,
+  "averageTicket": 20833.33,
+  "timesPerStage": {
+    "quote": {
+      "draft": 2.5,
+      "sent": 5.2,
+      "approved": 1.4
+    },
+    "project": {
+      "pending": 3.1,
+      "in_progress": 15.4
+    }
   }
 }
 ```
+
+> **Nota**: Los tiempos por etapa se devuelven en **días promedio**.
+
+---
+
+### GET `/kpi/quotes`
+
+Obtiene KPIs específicos de cotizaciones. Admite los mismos filtros: `companyId`, `userId`, `startDate`, `endDate`.
+
+---
+
+### GET `/kpi/projects`
+
+Obtiene KPIs específicos de proyectos. Admite los mismos filtros: `companyId`, `userId`, `startDate`, `endDate`.
+
+---
+
+### GET `/kpi/payments`
+
+Obtiene KPIs específicos de pagos. Admite los mismos filtros: `companyId`, `userId`, `startDate`, `endDate`.
+
+---
+
+### GET `/kpi/invoices`
+
+Obtiene KPIs específicos de facturación. Admite los mismos filtros: `companyId`, `userId`, `startDate`, `endDate`.
 
 ---
 
@@ -1814,7 +1965,10 @@ El token se obtiene al hacer login o registro exitoso en los endpoints de autent
 
 8. **Categorías de Cotizaciones**: Las cotizaciones pueden ser `kitchen`, `bathroom`, `basement` o `additional-work`. Cada tipo tiene campos dedicados (`kitchenInformation`, `bathroomInformation`, `basementInformation`, `additionalWorkInformation`) con nombres estandarizados.
 
-9. **Estados de Cotizaciones**: `draft`, `sent`, `approved`, `rejected`, `in_progress`, `completed`
+9. **Estados de Cotizaciones**: `draft`, `pending`, `approved`, `sent`, `rejected`, `in_progress`, `completed`
+   - **Flujo de aprobación**: `draft` → `pending` → `approved` → `sent`
+   - **Rechazo**: `pending` → `rejected` (requiere `rejectionComments.comment`)
+   - **Reintento**: `rejected` → `draft` o `pending`
 
 10. **Estados de Proyectos**: `pending`, `in_progress`, `on_hold`, `completed`, `cancelled`
 
@@ -2074,4 +2228,15 @@ Obtiene el historial de pagos de una factura específica.
 
 ---
 
-**Última actualización**: 12 de Diciembre de 2025
+**Última actualización**: 22 de Enero de 2026
+
+---
+
+## Historial de Estados y Auditoría
+
+El sistema registra automáticamente cada cambio de estado en cotizaciones y proyectos. Esto permite:
+1. Calcular el **tiempo promedio por etapa** en el dashboard de ventas.
+2. Auditar quién realizó cada cambio y cuándo.
+3. Analizar cuellos de botella en el proceso comercial.
+
+Cada vez que se crea o actualiza el estado de una `Quote` o un `Project`, se genera una entrada en el historial con el timestamp, el estado origen, el estado destino y el usuario responsable.

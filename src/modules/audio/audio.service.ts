@@ -11,12 +11,14 @@ import { Readable } from 'stream'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
+import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3'
 
 @Injectable()
 export class AudioService {
   private readonly logger = new Logger(AudioService.name)
   private readonly openai: OpenAI
   private readonly chatModel: ChatOpenAI
+  private readonly s3Client: S3Client
   private ffmpegAvailable = false
   private readonly summaryMinRatio: number
 
@@ -62,6 +64,24 @@ export class AudioService {
     ratio = Math.max(0.1, Math.min(0.95, ratio))
     this.summaryMinRatio = ratio
     this.logger.log(`[Resumen] Min ratio configurado: ${this.summaryMinRatio}`)
+
+    // Configurar cliente S3 para descargar archivos
+    const region = this.configService.get<string>('AWS_REGION')?.trim().replace(/^['"]|['"]$/g, '') || 'us-east-1'
+    const accessKeyId = this.configService.get<string>('AWS_ACCESS_KEY_ID')?.trim().replace(/^['"]|['"]$/g, '')
+    const secretAccessKey = this.configService.get<string>('AWS_SECRET_ACCESS_KEY')?.trim().replace(/^['"]|['"]$/g, '')
+
+    if (accessKeyId && secretAccessKey) {
+      this.s3Client = new S3Client({
+        region,
+        credentials: {
+          accessKeyId,
+          secretAccessKey,
+        },
+      })
+      this.logger.log('[S3] Cliente configurado para descargar archivos')
+    } else {
+      this.logger.warn('[S3] Credenciales no encontradas. No se podrán descargar archivos desde S3')
+    }
   }
 
   async summarizeAudio(
@@ -86,6 +106,120 @@ export class AudioService {
     } catch (error) {
       this.logger.error(
         `Error en summarizeAudio: ${error.message}`,
+        error.stack
+      )
+      throw error
+    }
+  }
+
+  /**
+   * Descarga un archivo desde S3 y lo convierte en formato Express.Multer.File
+   */
+  async downloadFileFromS3(url: string): Promise<Express.Multer.File> {
+    try {
+      this.logger.log(`[S3] Descargando archivo desde: ${url}`)
+
+      // Parsear URL de S3
+      // Formato esperado: https://bucket-name.s3.region.amazonaws.com/key
+      // o: https://s3.region.amazonaws.com/bucket-name/key
+      const urlObj = new URL(url)
+      let bucketName: string
+      let key: string
+
+      if (urlObj.hostname.includes('.s3.') || urlObj.hostname.includes('s3.amazonaws.com')) {
+        // Formato: bucket.s3.region.amazonaws.com o s3.region.amazonaws.com/bucket
+        if (urlObj.hostname.startsWith('s3.')) {
+          // Formato: s3.region.amazonaws.com/bucket/key
+          const pathParts = urlObj.pathname.split('/').filter((p) => p)
+          bucketName = pathParts[0]
+          key = pathParts.slice(1).join('/')
+        } else {
+          // Formato: bucket.s3.region.amazonaws.com/key
+          bucketName = urlObj.hostname.split('.')[0]
+          key = urlObj.pathname.substring(1) // Remover el '/' inicial
+        }
+      } else {
+        throw new Error(`URL de S3 no reconocida: ${url}`)
+      }
+
+      if (!this.s3Client) {
+        throw new Error('Cliente S3 no configurado. Verifica las credenciales AWS.')
+      }
+
+      // Descargar archivo desde S3
+      const command = new GetObjectCommand({
+        Bucket: bucketName,
+        Key: key,
+      })
+
+      const response = await this.s3Client.send(command)
+      if (!response.Body) {
+        throw new Error('No se pudo obtener el cuerpo del archivo desde S3')
+      }
+
+      // Convertir stream a buffer
+      const chunks: Uint8Array[] = []
+      for await (const chunk of response.Body as any) {
+        chunks.push(chunk)
+      }
+      const buffer = Buffer.concat(chunks)
+
+      // Determinar MIME type y nombre de archivo
+      const contentType = response.ContentType || 'audio/m4a'
+      const contentDisposition = response.ContentDisposition || ''
+      let originalname = key.split('/').pop() || 'audio.m4a'
+
+      // Extraer nombre del archivo del Content-Disposition si está disponible
+      const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/)
+      if (filenameMatch && filenameMatch[1]) {
+        originalname = filenameMatch[1].replace(/['"]/g, '')
+      }
+
+      // Crear objeto compatible con Express.Multer.File
+      const file: Express.Multer.File = {
+        fieldname: 'audio',
+        originalname,
+        encoding: '7bit',
+        mimetype: contentType,
+        buffer,
+        size: buffer.length,
+        destination: '',
+        filename: originalname,
+        path: '',
+        stream: new Readable({
+          read() {
+            this.push(buffer)
+            this.push(null)
+          },
+        }),
+      }
+
+      this.logger.log(
+        `[S3] Archivo descargado: ${originalname}, tamaño: ${buffer.length} bytes, tipo: ${contentType}`
+      )
+
+      return file
+    } catch (error: any) {
+      this.logger.error(`[S3] Error al descargar archivo: ${error.message}`, error.stack)
+      throw new Error(`Error al descargar archivo desde S3: ${error.message}`)
+    }
+  }
+
+  /**
+   * Procesa un audio desde una URL de S3
+   */
+  async summarizeAudioFromUrl(url: string): Promise<{ summary: string; structuredSummary: string }> {
+    try {
+      this.logger.log(`Iniciando procesamiento desde URL: ${url}`)
+
+      // Descargar archivo desde S3
+      const file = await this.downloadFileFromS3(url)
+
+      // Procesar con el método existente
+      return await this.summarizeAudio(file)
+    } catch (error: any) {
+      this.logger.error(
+        `Error en summarizeAudioFromUrl: ${error.message}`,
         error.stack
       )
       throw error

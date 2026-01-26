@@ -5,6 +5,7 @@ import { Quote, QuoteStatus } from '../quote/schemas/quote.schema';
 import { Project, ProjectStatus } from '../project/schemas/project.schema';
 import { Payment, PaymentStatus } from '../payment/schemas/payment.schema';
 import { Invoice, InvoiceStatus } from '../invoice/schemas/invoice.schema';
+import { StatusHistoryService } from '../status-history/status-history.service';
 
 @Injectable()
 export class KpiService {
@@ -13,17 +14,37 @@ export class KpiService {
     @InjectModel(Project.name) private readonly projectModel: Model<Project>,
     @InjectModel(Payment.name) private readonly paymentModel: Model<Payment>,
     @InjectModel(Invoice.name) private readonly invoiceModel: Model<Invoice>,
+    private readonly statusHistoryService: StatusHistoryService,
   ) {}
 
-  private validateCompanyId(companyId?: string) {
-    if (companyId && !Types.ObjectId.isValid(companyId)) {
-      throw new BadRequestException('Invalid companyId format');
+  private validateFilters(companyId?: string, userId?: string, startDate?: string, endDate?: string) {
+    const filter: Record<string, any> = {};
+
+    if (companyId) {
+      if (!Types.ObjectId.isValid(companyId)) {
+        throw new BadRequestException('Invalid companyId format');
+      }
+      filter.companyId = new Types.ObjectId(companyId);
     }
-    return companyId ? { companyId: new Types.ObjectId(companyId) } : {};
+
+    if (userId) {
+      if (!Types.ObjectId.isValid(userId)) {
+        throw new BadRequestException('Invalid userId format');
+      }
+      filter.userId = new Types.ObjectId(userId);
+    }
+
+    if (startDate || endDate) {
+      filter.createdAt = {};
+      if (startDate) filter.createdAt.$gte = new Date(startDate);
+      if (endDate) filter.createdAt.$lte = new Date(endDate);
+    }
+
+    return filter;
   }
 
-  async getKpisByCompany(companyId?: string) {
-    const companyFilter = this.validateCompanyId(companyId);
+  async getKpisByCompany(companyId?: string, userId?: string, startDate?: string, endDate?: string) {
+    const filters = this.validateFilters(companyId, userId, startDate, endDate);
 
     const [
       totalQuotes,
@@ -37,37 +58,37 @@ export class KpiService {
       invoicesTotals,
     ] = await Promise.all([
       // Quotes
-      this.quoteModel.countDocuments(companyFilter).exec(),
+      this.quoteModel.countDocuments(filters).exec(),
       this.quoteModel.aggregate([
-        { $match: companyFilter },
+        { $match: filters },
         { $group: { _id: '$status', count: { $sum: 1 } } },
       ]).exec(),
       // Projects
-      this.projectModel.countDocuments(companyFilter).exec(),
+      this.projectModel.countDocuments(filters).exec(),
       this.projectModel.aggregate([
-        { $match: companyFilter },
+        { $match: filters },
         { $group: { _id: '$status', count: { $sum: 1 } } },
       ]).exec(),
       // Payments
-      this.paymentModel.countDocuments(companyFilter).exec(),
+      this.paymentModel.countDocuments(filters).exec(),
       this.paymentModel.aggregate([
-        { $match: { ...companyFilter, status: PaymentStatus.COMPLETED } },
+        { $match: { ...filters, status: PaymentStatus.COMPLETED } },
         { $group: { _id: null, total: { $sum: '$amount' } } },
       ]).exec(),
       // Invoices
-      this.invoiceModel.countDocuments(companyFilter).exec(),
+      this.invoiceModel.countDocuments(filters).exec(),
       this.invoiceModel.aggregate([
-        { $match: companyFilter },
+        { $match: filters },
         { $group: { _id: '$status', count: { $sum: 1 } } },
       ]).exec(),
       this.invoiceModel.aggregate([
-        { $match: companyFilter },
+        { $match: filters },
         { $group: { _id: null, totalBilled: { $sum: '$totalAmount' }, totalPaid: { $sum: '$paidAmount' } } },
       ]).exec(),
     ]);
 
     const approvedQuotes = await this.quoteModel.countDocuments({
-      ...companyFilter,
+      ...filters,
       status: QuoteStatus.APPROVED,
     }).exec();
 
@@ -104,21 +125,60 @@ export class KpiService {
     };
   }
 
-  async getQuotesKpis(companyId?: string) {
-    const companyFilter = this.validateCompanyId(companyId);
+  async getSalesDashboard(companyId: string, userId?: string, startDate?: string, endDate?: string) {
+    const filters = this.validateFilters(companyId, userId, startDate, endDate);
+
+    const [
+      kpis,
+      averageTimeQuotes,
+      averageTimeProjects,
+    ] = await Promise.all([
+      this.getKpisByCompany(companyId, userId, startDate, endDate),
+      this.statusHistoryService.getAverageTimePerStage(
+        companyId, 
+        'quote', 
+        startDate ? new Date(startDate) : undefined, 
+        endDate ? new Date(endDate) : undefined
+      ),
+      this.statusHistoryService.getAverageTimePerStage(
+        companyId, 
+        'project', 
+        startDate ? new Date(startDate) : undefined, 
+        endDate ? new Date(endDate) : undefined
+      ),
+    ]);
+
+    const totalRevenue = kpis.payments.totalRevenue;
+    const approvedCount = kpis.quotes.approved;
+    const averageTicket = approvedCount > 0 ? parseFloat((totalRevenue / approvedCount).toFixed(2)) : 0;
+
+    return {
+      revenue: totalRevenue,
+      pipeline: kpis.quotes.byStatus,
+      conversionRate: kpis.quotes.conversionRate,
+      averageTicket,
+      timesPerStage: {
+        quote: averageTimeQuotes,
+        project: averageTimeProjects,
+      },
+    };
+  }
+
+  async getQuotesKpis(companyId?: string, userId?: string, startDate?: string, endDate?: string) {
+    const filters = this.validateFilters(companyId, userId, startDate, endDate);
 
     const [total, byCategory, byStatus, approved] = await Promise.all([
-      this.quoteModel.countDocuments(companyFilter).exec(),
+      this.quoteModel.countDocuments(filters).exec(),
       this.quoteModel.aggregate([
-        { $match: companyFilter },
+        { $match: filters },
         { $group: { _id: '$category', count: { $sum: 1 } } },
       ]).exec(),
       this.quoteModel.aggregate([
-        { $match: companyFilter },
+        { $match: filters },
         { $group: { _id: '$status', count: { $sum: 1 } } },
       ]).exec(),
       this.quoteModel.countDocuments({
-        ...companyFilter,
+        ...filters,
         status: QuoteStatus.APPROVED,
       }).exec(),
     ]);
@@ -132,17 +192,17 @@ export class KpiService {
     };
   }
 
-  async getProjectsKpis(companyId?: string) {
-    const companyFilter = this.validateCompanyId(companyId);
+  async getProjectsKpis(companyId?: string, userId?: string, startDate?: string, endDate?: string) {
+    const filters = this.validateFilters(companyId, userId, startDate, endDate);
 
     const [total, byStatus, active] = await Promise.all([
-      this.projectModel.countDocuments(companyFilter).exec(),
+      this.projectModel.countDocuments(filters).exec(),
       this.projectModel.aggregate([
-        { $match: companyFilter },
+        { $match: filters },
         { $group: { _id: '$status', count: { $sum: 1 } } },
       ]).exec(),
       this.projectModel.countDocuments({
-        ...companyFilter,
+        ...filters,
         status: { $in: [ProjectStatus.PENDING, ProjectStatus.IN_PROGRESS] },
       }).exec(),
     ]);
@@ -154,20 +214,20 @@ export class KpiService {
     };
   }
 
-  async getPaymentsKpis(companyId?: string) {
-    const companyFilter = this.validateCompanyId(companyId);
+  async getPaymentsKpis(companyId?: string, userId?: string, startDate?: string, endDate?: string) {
+    const filters = this.validateFilters(companyId, userId, startDate, endDate);
 
     const [total, byStatus, revenue, lastPayments] = await Promise.all([
-      this.paymentModel.countDocuments(companyFilter).exec(),
+      this.paymentModel.countDocuments(filters).exec(),
       this.paymentModel.aggregate([
-        { $match: companyFilter },
+        { $match: filters },
         { $group: { _id: '$status', count: { $sum: 1 } } },
       ]).exec(),
       this.paymentModel.aggregate([
-        { $match: { ...companyFilter, status: PaymentStatus.COMPLETED } },
+        { $match: { ...filters, status: PaymentStatus.COMPLETED } },
         { $group: { _id: null, total: { $sum: '$amount' } } },
       ]).exec(),
-      this.paymentModel.find(companyFilter).sort({ createdAt: -1 }).limit(5).exec(),
+      this.paymentModel.find(filters).sort({ createdAt: -1 }).limit(5).exec(),
     ]);
 
     return {
@@ -178,17 +238,17 @@ export class KpiService {
     };
   }
 
-  async getInvoicesKpis(companyId?: string) {
-    const companyFilter = this.validateCompanyId(companyId);
+  async getInvoicesKpis(companyId?: string, userId?: string, startDate?: string, endDate?: string) {
+    const filters = this.validateFilters(companyId, userId, startDate, endDate);
 
     const [total, byStatus, totals] = await Promise.all([
-      this.invoiceModel.countDocuments(companyFilter).exec(),
+      this.invoiceModel.countDocuments(filters).exec(),
       this.invoiceModel.aggregate([
-        { $match: companyFilter },
+        { $match: filters },
         { $group: { _id: '$status', count: { $sum: 1 } } },
       ]).exec(),
       this.invoiceModel.aggregate([
-        { $match: companyFilter },
+        { $match: filters },
         { $group: { _id: null, billed: { $sum: '$totalAmount' }, paid: { $sum: '$paidAmount' } } },
       ]).exec(),
     ]);

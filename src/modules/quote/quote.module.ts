@@ -7,6 +7,7 @@ import { Project, ProjectSchema } from '../project/schemas/project.schema';
 import { Customer, CustomerSchema } from '../customer/entities/customer.entity';
 import { Company, CompanySchema } from '../company/schemas/company.schema';
 import { MailModule } from '../mail/mail.module';
+import { StatusHistoryModule } from '../status-history/status-history.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { MailModule } from '../mail/mail.module';
       { name: Company.name, schema: CompanySchema },
     ]),
     MailModule,
+    StatusHistoryModule,
   ],
   controllers: [QuoteController],
   providers: [QuoteService],

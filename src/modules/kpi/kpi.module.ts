@@ -6,6 +6,7 @@ import { Quote, QuoteSchema } from '../quote/schemas/quote.schema';
 import { Project, ProjectSchema } from '../project/schemas/project.schema';
 import { Payment, PaymentSchema } from '../payment/schemas/payment.schema';
 import { Invoice, InvoiceSchema } from '../invoice/schemas/invoice.schema';
+import { StatusHistoryModule } from '../status-history/status-history.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { Invoice, InvoiceSchema } from '../invoice/schemas/invoice.schema';
       { name: Payment.name, schema: PaymentSchema },
       { name: Invoice.name, schema: InvoiceSchema },
     ]),
+    StatusHistoryModule,
   ],
   controllers: [KpiController],
   providers: [KpiService],

@@ -8,6 +8,7 @@ import {
   IsArray,
   ValidateNested,
   IsNotEmpty,
+  ValidateIf,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { QuoteCategory, QuoteStatus } from '../schemas/quote.schema';
@@ -112,4 +113,26 @@ export class UpdateQuoteDto {
   @ValidateNested()
   @Type(() => MaterialsDto)
   materials?: MaterialsDto;
+
+  @IsObject()
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => RejectionCommentsDto)
+  rejectionComments?: RejectionCommentsDto | null;
+}
+
+class RejectionCommentsDto {
+  @IsString()
+  @IsNotEmpty()
+  @ValidateIf((o, value) => value !== undefined && value !== null)
+  comment: string;
+
+  @IsMongoId()
+  @IsOptional()
+  rejectedBy?: string;
+
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  mediaFiles?: string[];
 }

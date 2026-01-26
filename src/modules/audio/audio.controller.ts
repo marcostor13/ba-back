@@ -6,10 +6,18 @@ import {
     BadRequestException,
     HttpStatus,
     HttpCode,
+    Body,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AudioService } from './audio.service';
 import * as path from 'path';
+import { IsString, IsUrl } from 'class-validator';
+
+class SummarizeAudioUrlDto {
+    @IsString()
+    @IsUrl()
+    url: string;
+}
 
 @Controller('audio')
 export class AudioController {
@@ -79,6 +87,38 @@ export class AudioController {
             };
         } catch (error) {
             console.error('[AudioController] Error al procesar el audio:', error);
+            throw new BadRequestException(
+                `Error al procesar el audio: ${error?.message}`
+            );
+        }
+    }
+
+    @Post('summarize-from-url')
+    @HttpCode(HttpStatus.OK)
+    async summarizeAudioFromUrl(@Body() dto: SummarizeAudioUrlDto) {
+        console.log('[AudioController] POST /audio/summarize-from-url llamado');
+        console.log(`[AudioController] URL recibida: ${dto.url}`);
+
+        if (!dto.url) {
+            throw new BadRequestException('URL del archivo de audio es requerida');
+        }
+
+        // Validar que sea una URL válida
+        try {
+            new URL(dto.url);
+        } catch {
+            throw new BadRequestException('URL inválida');
+        }
+
+        try {
+            const result = await this.audioService.summarizeAudioFromUrl(dto.url);
+            return {
+                success: true,
+                data: result,
+                message: 'Audio procesado y resumido exitosamente desde URL',
+            };
+        } catch (error) {
+            console.error('[AudioController] Error al procesar el audio desde URL:', error);
             throw new BadRequestException(
                 `Error al procesar el audio: ${error?.message}`
             );

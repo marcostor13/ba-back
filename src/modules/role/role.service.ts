@@ -5,6 +5,12 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Role } from './entities/role.entity';
 
+export interface RoleLean {
+  _id: Types.ObjectId;
+  name: string;
+  userId: Types.ObjectId;
+  active: boolean;
+}
 
 @Injectable()
 export class RoleService {
@@ -27,6 +33,10 @@ export class RoleService {
 
   findByUserId(userId: string) {
     return this.roleModel.findOne({ userId: new Types.ObjectId(userId) });
+  }
+
+  findByUserIds(userIds: Types.ObjectId[]): Promise<RoleLean[]> {
+    return this.roleModel.find({ userId: { $in: userIds } }).lean().exec() as unknown as Promise<RoleLean[]>;
   }
 
   update(id: string, updateRoleDto: UpdateRoleDto) {

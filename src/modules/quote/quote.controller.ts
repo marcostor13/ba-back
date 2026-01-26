@@ -12,6 +12,9 @@ import {
 import { QuoteService } from './quote.service';
 import { CreateQuoteRequestDto } from './dto/create-quote-request.dto';
 import { UpdateQuoteDto } from './dto/update-quote.dto';
+import { RejectQuoteDto } from './dto/reject-quote.dto';
+import { ApproveQuoteDto } from './dto/approve-quote.dto';
+import { SendQuoteDto } from './dto/send-quote.dto';
 import { Quote, QuoteCategory, QuoteStatus } from './schemas/quote.schema';
 
 const validationPipe = new ValidationPipe({ transform: true, whitelist: true });
@@ -62,6 +65,30 @@ export class QuoteController {
     @Body(validationPipe) body: UpdateQuoteDto,
   ): Promise<Quote> {
     return this.quoteService.update(id, body);
+  }
+
+  @Post(':id/approve')
+  async approve(
+    @Param('id') id: string,
+    @Body(validationPipe) body: ApproveQuoteDto,
+  ): Promise<Quote> {
+    return this.quoteService.approve(id, body);
+  }
+
+  @Post(':id/reject')
+  async reject(
+    @Param('id') id: string,
+    @Body(validationPipe) body: RejectQuoteDto,
+  ): Promise<Quote> {
+    return this.quoteService.reject(id, body);
+  }
+
+  @Post(':id/send')
+  async send(
+    @Param('id') id: string,
+    @Body(validationPipe) body: SendQuoteDto,
+  ): Promise<Quote> {
+    return this.quoteService.send(id, body);
   }
 
   @Delete(':id')

@@ -11,8 +11,9 @@ export type QuoteDocument = Quote & Document;
 
 export enum QuoteStatus {
   DRAFT = 'draft',
-  SENT = 'sent',
+  PENDING = 'pending',
   APPROVED = 'approved',
+  SENT = 'sent',
   REJECTED = 'rejected',
   IN_PROGRESS = 'in_progress',
   COMPLETED = 'completed',
@@ -56,6 +57,23 @@ export class Quote {
 
   @Prop({ type: String, required: false })
   notes?: string;
+
+  @Prop({
+    type: {
+      comment: { type: String, required: false },
+      rejectedBy: { type: MongooseSchema.Types.ObjectId, required: false },
+      rejectedAt: { type: Date, required: false },
+      mediaFiles: { type: [String], required: false, default: [] },
+    },
+    required: false,
+    _id: false,
+  })
+  rejectionComments?: {
+    comment: string;
+    rejectedBy?: MongooseSchema.Types.ObjectId;
+    rejectedAt?: Date;
+    mediaFiles?: string[];
+  } | null;
 
   // Información del formulario según la categoría
   @Prop({ type: Object, required: false })

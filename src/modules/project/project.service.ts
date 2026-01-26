@@ -4,11 +4,13 @@ import { Model, Types } from 'mongoose';
 import { Project, ProjectDocument, ProjectStatus } from './schemas/project.schema';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
+import { StatusHistoryService } from '../status-history/status-history.service';
 
 @Injectable()
 export class ProjectService {
   constructor(
     @InjectModel(Project.name) private readonly projectModel: Model<ProjectDocument>,
+    private readonly statusHistoryService: StatusHistoryService,
   ) {}
 
   async create(dto: CreateProjectDto): Promise<Project> {
@@ -31,6 +33,16 @@ export class ProjectService {
     if (dto.approvedQuoteId) projectData.approvedQuoteId = new Types.ObjectId(dto.approvedQuoteId);
 
     const created = await this.projectModel.create(projectData);
+    
+    // Record initial status
+    await this.statusHistoryService.recordTransition({
+      entityId: (created._id as Types.ObjectId).toString(),
+      entityType: 'project',
+      toStatus: created.status,
+      userId: dto.estimatorId,
+      companyId: dto.companyId,
+    });
+
     return created.toObject();
   }
 
@@ -76,6 +88,11 @@ export class ProjectService {
       throw new BadRequestException('Invalid ID format');
     }
 
+    const existingProject = await this.projectModel.findById(id).exec();
+    if (!existingProject) {
+      throw new NotFoundException(`Project with ID ${id} not found`);
+    }
+
     const updateDoc: Record<string, unknown> = {};
     if (update.name !== undefined) updateDoc.name = update.name;
     if (update.description !== undefined) updateDoc.description = update.description;
@@ -84,7 +101,22 @@ export class ProjectService {
     if (update.customerId !== undefined) updateDoc.customerId = new Types.ObjectId(update.customerId);
     if (update.estimatorId !== undefined) updateDoc.estimatorId = new Types.ObjectId(update.estimatorId);
     if (update.approvedQuoteId !== undefined) updateDoc.approvedQuoteId = new Types.ObjectId(update.approvedQuoteId);
-    if (update.status !== undefined) updateDoc.status = update.status;
+    
+    if (update.status !== undefined && update.status !== existingProject.status) {
+      const fromStatus = existingProject.status;
+      updateDoc.status = update.status;
+      
+      // Record transition
+      await this.statusHistoryService.recordTransition({
+        entityId: id,
+        entityType: 'project',
+        fromStatus,
+        toStatus: update.status,
+        userId: update.estimatorId || existingProject.estimatorId?.toString(),
+        companyId: existingProject.companyId.toString(),
+      });
+    }
+
     if (update.startDate !== undefined) updateDoc.startDate = update.startDate;
     if (update.expectedEndDate !== undefined) updateDoc.expectedEndDate = update.expectedEndDate;
     if (update.actualEndDate !== undefined) updateDoc.actualEndDate = update.actualEndDate;
