@@ -8,6 +8,9 @@ import { Document } from 'langchain/document'
 import * as ffmpeg from 'fluent-ffmpeg'
 import ffmpegPath from 'ffmpeg-static'
 import { Readable } from 'stream'
+import * as fs from 'fs'
+import * as path from 'path'
+import * as os from 'os'
 
 @Injectable()
 export class AudioService {
@@ -26,7 +29,7 @@ export class AudioService {
     // Inicializar modelo de chat para resumen
     this.chatModel = new ChatOpenAI({
       openAIApiKey: this.configService.get<string>('OPENAI_API_KEY'),
-      modelName: 'gpt-4o',
+      modelName: 'gpt-5.1',
       temperature: 0.3, // Temperatura baja para resúmenes más consistentes
     })
 
@@ -90,6 +93,9 @@ export class AudioService {
   }
 
   private async transcribeAudio(file: Express.Multer.File): Promise<string> {
+    let tempInputFile: string | null = null
+    let tempOutputFile: string | null = null
+
     try {
       this.logger.log(
         `[Transcripción] Preparando archivo: name=${file.originalname}, mime=${file.mimetype}, size=${file.size}`
@@ -99,20 +105,38 @@ export class AudioService {
       let uploadBuffer: Buffer
       let uploadMime: string
       let uploadName: string
+
       if (this.ffmpegAvailable) {
         try {
-          const transcodedBuffer = await this.transcodeToMp3(file.buffer)
+          // Intentar transcodificación con método mejorado
+          const transcodedBuffer = await this.transcodeToMp3Robust(file)
           this.logger.log(`[Transcripción] Transcodificación completada: ${transcodedBuffer.length} bytes`)
           uploadBuffer = transcodedBuffer
           uploadMime = 'audio/mpeg'
-          uploadName = `${file.originalname}.mp3`
+          uploadName = `${path.parse(file.originalname).name}.mp3`
         } catch (tErr: any) {
           this.logger.warn(`[Transcripción] Fallback sin transcodificar por error: ${tErr?.message || tErr}`)
+          // Verificar si el formato original es compatible con OpenAI
+          const isCompatible = this.isFormatCompatible(file.mimetype, file.originalname)
+          if (!isCompatible) {
+            throw new Error(
+              `Formato no compatible con OpenAI después de fallo de transcodificación. ` +
+              `Formato recibido: ${file.mimetype}. Formatos soportados: flac, m4a, mp3, mp4, mpeg, mpga, oga, ogg, wav, webm`
+            )
+          }
           uploadBuffer = file.buffer
           uploadMime = file.mimetype || 'audio/wav'
           uploadName = file.originalname
         }
       } else {
+        // Verificar compatibilidad si ffmpeg no está disponible
+        const isCompatible = this.isFormatCompatible(file.mimetype, file.originalname)
+        if (!isCompatible) {
+          throw new Error(
+            `Formato no compatible con OpenAI. ffmpeg no disponible para transcodificar. ` +
+            `Formato recibido: ${file.mimetype}. Formatos soportados: flac, m4a, mp3, mp4, mpeg, mpga, oga, ogg, wav, webm`
+          )
+        }
         this.logger.log('[Transcripción] ffmpeg no disponible. Enviando buffer original a OpenAI')
         uploadBuffer = file.buffer
         uploadMime = file.mimetype || 'audio/wav'
@@ -144,10 +168,80 @@ export class AudioService {
         this.logger.error(`Detalle OpenAI: ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`)
       }
       throw new Error(`Error al transcribir el audio: ${error?.message || error}`)
+    } finally {
+      // Limpiar archivos temporales si existen
+      if (tempInputFile && fs.existsSync(tempInputFile)) {
+        try {
+          fs.unlinkSync(tempInputFile)
+        } catch (e) {
+          this.logger.warn(`No se pudo eliminar archivo temporal: ${tempInputFile}`)
+        }
+      }
+      if (tempOutputFile && fs.existsSync(tempOutputFile)) {
+        try {
+          fs.unlinkSync(tempOutputFile)
+        } catch (e) {
+          this.logger.warn(`No se pudo eliminar archivo temporal: ${tempOutputFile}`)
+        }
+      }
     }
   }
 
-  private async transcodeToMp3(inputBuffer: Buffer): Promise<Buffer> {
+  /**
+   * Verifica si el formato es compatible con OpenAI Whisper
+   */
+  private isFormatCompatible(mimeType: string | undefined, filename: string): boolean {
+    const supportedFormats = ['flac', 'm4a', 'mp3', 'mp4', 'mpeg', 'mpga', 'oga', 'ogg', 'wav', 'webm']
+    const ext = path.extname(filename || '').toLowerCase().replace('.', '')
+
+    if (ext && supportedFormats.includes(ext)) {
+      return true
+    }
+
+    if (mimeType) {
+      const mimeLower = mimeType.toLowerCase()
+      // Verificar MIME types comunes
+      if (
+        mimeLower.includes('mp3') ||
+        mimeLower.includes('mpeg') ||
+        mimeLower.includes('wav') ||
+        mimeLower.includes('m4a') ||
+        mimeLower.includes('ogg') ||
+        mimeLower.includes('webm') ||
+        mimeLower.includes('flac') ||
+        mimeLower.includes('mp4')
+      ) {
+        return true
+      }
+    }
+
+    return false
+  }
+
+  /**
+   * Transcodifica a MP3 usando un método más robusto que maneja mejor los formatos de iOS
+   */
+  private async transcodeToMp3Robust(file: Express.Multer.File): Promise<Buffer> {
+    // Intentar primero con stream (más rápido)
+    try {
+      return await this.transcodeToMp3Stream(file.buffer, file.mimetype, file.originalname)
+    } catch (streamError: any) {
+      this.logger.warn(
+        `[FFmpeg] Fallo en transcodificación por stream: ${streamError?.message}. Intentando con archivo temporal...`
+      )
+      // Fallback a método con archivo temporal (más confiable para formatos problemáticos)
+      return await this.transcodeToMp3File(file)
+    }
+  }
+
+  /**
+   * Transcodifica usando stream (método original mejorado)
+   */
+  private async transcodeToMp3Stream(
+    inputBuffer: Buffer,
+    mimeType?: string,
+    originalName?: string
+  ): Promise<Buffer> {
     return new Promise<Buffer>((resolve, reject) => {
       const inputStream = new Readable({ read() { } })
       inputStream.push(inputBuffer)
@@ -157,17 +251,35 @@ export class AudioService {
 
       // @ts-ignore tipos de fluent-ffmpeg
       const command = ffmpeg(inputStream)
+
+      // Detectar y especificar formato de entrada si es necesario
+      const inputFormat = this.detectInputFormat(mimeType, originalName)
+      if (inputFormat) {
+        command.inputFormat(inputFormat)
+        this.logger.log(`[FFmpeg] Formato de entrada detectado: ${inputFormat}`)
+      }
+
+      command
         .audioCodec('libmp3lame')
         .audioBitrate('128k')
         .format('mp3')
+        .audioChannels(2) // Estéreo
+        .audioFrequency(44100) // 44.1kHz
         .on('start', (cmd: string) => this.logger.log(`[FFmpeg] start: ${cmd}`))
-        .on('stderr', (line: string) => this.logger.log(`[FFmpeg] ${line}`))
+        .on('stderr', (line: string) => {
+          // Filtrar mensajes de stderr que no son errores
+          if (line.includes('error') || line.includes('Error') || line.includes('Invalid')) {
+            this.logger.error(`[FFmpeg] stderr: ${line}`)
+          } else {
+            this.logger.debug(`[FFmpeg] ${line}`)
+          }
+        })
         .on('error', (err: Error) => {
           this.logger.error(`[FFmpeg] error: ${err.message}`)
           reject(err)
         })
         .on('end', () => {
-          this.logger.log('[FFmpeg] end')
+          this.logger.log(`[FFmpeg] end - ${chunks.length} chunks, ${Buffer.concat(chunks).length} bytes`)
           resolve(Buffer.concat(chunks))
         })
 
@@ -178,6 +290,142 @@ export class AudioService {
         reject(err)
       })
     })
+  }
+
+  /**
+   * Transcodifica usando archivos temporales (más confiable para formatos problemáticos como iOS)
+   */
+  private async transcodeToMp3File(file: Express.Multer.File): Promise<Buffer> {
+    const tempDir = os.tmpdir()
+    const inputExt = path.extname(file.originalname || '') || this.getExtensionFromMime(file.mimetype) || '.tmp'
+    const tempInputFile = path.join(tempDir, `audio_input_${Date.now()}${inputExt}`)
+    const tempOutputFile = path.join(tempDir, `audio_output_${Date.now()}.mp3`)
+
+    try {
+      // Escribir buffer a archivo temporal
+      fs.writeFileSync(tempInputFile, file.buffer)
+      this.logger.log(`[FFmpeg] Archivo temporal creado: ${tempInputFile}`)
+
+      // Transcodificar usando archivo
+      await new Promise<void>((resolve, reject) => {
+        const inputFormat = this.detectInputFormat(file.mimetype, file.originalname)
+
+        // @ts-ignore tipos de fluent-ffmpeg
+        const command = ffmpeg(tempInputFile)
+
+        if (inputFormat) {
+          command.inputFormat(inputFormat)
+          this.logger.log(`[FFmpeg] Formato de entrada: ${inputFormat}`)
+        }
+
+        command
+          .audioCodec('libmp3lame')
+          .audioBitrate('128k')
+          .format('mp3')
+          .audioChannels(2)
+          .audioFrequency(44100)
+          .on('start', (cmd: string) => this.logger.log(`[FFmpeg] start: ${cmd}`))
+          .on('stderr', (line: string) => {
+            if (line.includes('error') || line.includes('Error') || line.includes('Invalid')) {
+              this.logger.error(`[FFmpeg] stderr: ${line}`)
+            } else {
+              this.logger.debug(`[FFmpeg] ${line}`)
+            }
+          })
+          .on('error', (err: Error) => {
+            this.logger.error(`[FFmpeg] error: ${err.message}`)
+            reject(err)
+          })
+          .on('end', () => {
+            this.logger.log('[FFmpeg] Transcodificación completada')
+            resolve()
+          })
+          .save(tempOutputFile)
+      })
+
+      // Leer archivo de salida
+      const outputBuffer = fs.readFileSync(tempOutputFile)
+      this.logger.log(`[FFmpeg] Archivo de salida leído: ${outputBuffer.length} bytes`)
+
+      return outputBuffer
+    } finally {
+      // Limpiar archivos temporales
+      if (fs.existsSync(tempInputFile)) {
+        try {
+          fs.unlinkSync(tempInputFile)
+        } catch (e) {
+          this.logger.warn(`No se pudo eliminar archivo temporal: ${tempInputFile}`)
+        }
+      }
+      if (fs.existsSync(tempOutputFile)) {
+        try {
+          fs.unlinkSync(tempOutputFile)
+        } catch (e) {
+          this.logger.warn(`No se pudo eliminar archivo temporal: ${tempOutputFile}`)
+        }
+      }
+    }
+  }
+
+  /**
+   * Detecta el formato de entrada basado en MIME type y extensión
+   */
+  private detectInputFormat(mimeType?: string, filename?: string): string | null {
+    const ext = path.extname(filename || '').toLowerCase().replace('.', '')
+    const mime = (mimeType || '').toLowerCase()
+
+    // Formatos específicos de iOS
+    if (ext === 'caf' || mime.includes('caf')) {
+      return 'caf'
+    }
+    if (ext === 'm4a' || mime.includes('m4a') || mime.includes('x-m4a')) {
+      return 'm4a'
+    }
+    if (ext === 'mp4' || mime.includes('mp4')) {
+      return 'mp4'
+    }
+    if (ext === 'aac' || mime.includes('aac')) {
+      return 'aac'
+    }
+
+    // Otros formatos comunes
+    if (ext === 'wav' || mime.includes('wav')) {
+      return 'wav'
+    }
+    if (ext === 'ogg' || mime.includes('ogg') || mime.includes('oga')) {
+      return 'ogg'
+    }
+    if (ext === 'webm' || mime.includes('webm')) {
+      return 'webm'
+    }
+    if (ext === 'flac' || mime.includes('flac')) {
+      return 'flac'
+    }
+    if (ext === 'mp3' || mime.includes('mp3') || mime.includes('mpeg')) {
+      return 'mp3'
+    }
+
+    return null // Dejar que FFmpeg detecte automáticamente
+  }
+
+  /**
+   * Obtiene extensión de archivo basado en MIME type
+   */
+  private getExtensionFromMime(mimeType?: string): string {
+    if (!mimeType) return '.tmp'
+
+    const mime = mimeType.toLowerCase()
+    if (mime.includes('mp3') || mime.includes('mpeg')) return '.mp3'
+    if (mime.includes('wav')) return '.wav'
+    if (mime.includes('m4a') || mime.includes('x-m4a')) return '.m4a'
+    if (mime.includes('mp4')) return '.mp4'
+    if (mime.includes('ogg') || mime.includes('oga')) return '.ogg'
+    if (mime.includes('webm')) return '.webm'
+    if (mime.includes('flac')) return '.flac'
+    if (mime.includes('caf')) return '.caf'
+    if (mime.includes('aac')) return '.aac'
+
+    return '.tmp'
   }
 
   private async generateSummary(text: string): Promise<string> {
@@ -226,7 +474,7 @@ export class AudioService {
 
   /**
    * Reestructura el resumen pensando en estimaciones de obras/servicios técnicos.
-   * Siempre devuelve la salida en inglés y no inventa datos.
+   * Siempre devuelve la salida en inglés, sin inventar datos y sin omitir detalles relevantes.
    */
   private async structureTechnicalSummary(params: {
     sourceText: string
@@ -244,21 +492,32 @@ export class AudioService {
           {
             role: 'system',
             content:
-              'You are a senior pre-sales and technical estimation assistant for construction and remodeling. Structure technical information with precision. Do not invent facts. Always produce the output IN ENGLISH, regardless of the source language.',
+              [
+                'You are a senior pre-sales and technical estimation assistant for construction and remodeling.',
+                'Your job is to restructure information from a transcript so it is useful for technical estimation.',
+                'Do NOT invent facts or measurements.',
+                'Always produce the output IN ENGLISH only, translating faithfully from the source language when needed.',
+                'Do not omit relevant technical details that appear in the source text.',
+                'Never output placeholder sentences like "No content provided" or similar.',
+                'If there is no information for a section, simply omit that section.',
+              ].join('\n'),
           },
           {
             role: 'user',
             content: [
               'Restructure the following information for a technical estimator. Rules:',
               '- Do not invent facts. Do not extrapolate unknown measurements.',
-              '- Language: Output MUST be ENGLISH only. Translate if needed with high fidelity.',
+              '- Language: Output MUST be ENGLISH only, translating faithfully from the source text when required.',
+              '- Do not omit any relevant piece of information present in the source text, even if it is brief.',
               '- Clarity and order: use sections and lists when helpful for readability.',
               '- Include all relevant information; if something is ambiguous, flag it as pending clarification.',
+              '- IMPORTANT: Never write sentences such as "No content provided" or similar placeholders.',
+              '- If there is no information for a section, simply omit that section.',
               '',
               'Output format (important):',
               '- SECTION TITLES IN UPPERCASE, without any \"#\" prefix.',
               '- Leave one blank line between sections.',
-              '- Use lists with "- " for items, and numbering like "1)", "2)" when appropriate.',
+              '- Use lists with \"- \" for items, and numbering like \"1)\", \"2)\" when appropriate.',
               '- Preserve line breaks and indentation to enhance readability.',
               '- Do not use advanced Markdown, tables, JSON, or HTML. Plain structured text only.',
               '- Do not wrap the output in quotes or add extra commentary.',

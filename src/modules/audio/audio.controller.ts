@@ -39,9 +39,15 @@ export class AudioController {
             'audio/mp3',
             'audio/wav',
             'audio/m4a',
+            'audio/x-m4a', // Formato común en iOS
             'audio/ogg',
             'audio/webm',
             'audio/mp4',
+            'audio/aac', // Formato común en iOS
+            'audio/x-aac',
+            'audio/caf', // Core Audio Format (iOS)
+            'audio/x-caf',
+            'audio/flac',
         ];
 
         if (!allowedMimeTypes.includes(file.mimetype)) {

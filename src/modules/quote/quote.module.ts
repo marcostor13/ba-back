@@ -6,6 +6,7 @@ import { Quote, QuoteSchema } from './schemas/quote.schema';
 import { Project, ProjectSchema } from '../project/schemas/project.schema';
 import { Customer, CustomerSchema } from '../customer/entities/customer.entity';
 import { Company, CompanySchema } from '../company/schemas/company.schema';
+import { MailModule } from '../mail/mail.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { Company, CompanySchema } from '../company/schemas/company.schema';
       { name: Customer.name, schema: CustomerSchema },
       { name: Company.name, schema: CompanySchema },
     ]),
+    MailModule,
   ],
   controllers: [QuoteController],
   providers: [QuoteService],
