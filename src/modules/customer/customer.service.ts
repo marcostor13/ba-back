@@ -16,7 +16,7 @@ export class CustomerService {
     private readonly usersService: UsersService,
     private readonly roleService: RoleService,
     private readonly mailService: MailService,
-  ) {}
+  ) { }
 
   async create(createCustomerDto: CreateCustomerDto) {
     const normalizedEmail = createCustomerDto.email?.trim().toLowerCase();
@@ -81,6 +81,46 @@ export class CustomerService {
 
   findOne(id: string) {
     return this.customerModel.findById(id).exec();
+  }
+
+  findByUserId(userId: string) {
+    if (!Types.ObjectId.isValid(userId)) {
+      return null;
+    }
+    return this.customerModel.findOne({ userId: new Types.ObjectId(userId) }).exec();
+  }
+
+  anonymizeByUserId(userId: string): Promise<unknown> {
+    if (!Types.ObjectId.isValid(userId)) {
+      return Promise.resolve(null);
+    }
+    const uid = new Types.ObjectId(userId);
+    return this.customerModel
+      .updateOne(
+        { userId: uid },
+        {
+          $set: {
+            name: 'Deleted',
+            lastName: 'User',
+            email: `deleted_${userId}@anonymous.local`,
+            phone: '',
+            address: '',
+            city: '',
+            zipCode: '',
+            state: '',
+            leadSource: '',
+            description: '',
+          },
+        },
+      )
+      .exec();
+  }
+
+  removeByUserId(userId: string): Promise<unknown> {
+    if (!Types.ObjectId.isValid(userId)) {
+      return Promise.resolve(null);
+    }
+    return this.customerModel.deleteMany({ userId: new Types.ObjectId(userId) }).exec();
   }
 
   update(id: string, updateCustomerDto: UpdateCustomerDto) {

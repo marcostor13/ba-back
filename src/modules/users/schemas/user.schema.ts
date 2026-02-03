@@ -8,6 +8,12 @@ export interface UserDocument extends Document {
     password: string;
     resetCodeHash?: string;
     resetCodeExpiresAt?: Date;
+    verificationCodeHash?: string;
+    verificationCodeExpiresAt?: Date;
+    registrationData?: {
+        name: string;
+        password: string;
+    };
 }
 
 @Schema()
@@ -26,6 +32,18 @@ export class User {
 
     @Prop({ type: Date, required: false })
     resetCodeExpiresAt?: Date;
+
+    @Prop({ required: false })
+    verificationCodeHash?: string;
+
+    @Prop({ type: Date, required: false })
+    verificationCodeExpiresAt?: Date;
+
+    @Prop({ type: Object, required: false })
+    registrationData?: {
+        name: string;
+        password: string;
+    };
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

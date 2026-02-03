@@ -30,6 +30,13 @@ interface PasswordResetParams {
   expiresInMinutes: number;
 }
 
+interface RegistrationVerificationParams {
+  to: string;
+  name: string;
+  code: string;
+  expiresInMinutes: number;
+}
+
 @Injectable()
 export class MailService {
   private readonly transporter: nodemailer.Transporter;
@@ -199,6 +206,22 @@ export class MailService {
       <p>Este código expirará en ${expiresInMinutes} minutos.</p>
       <p>Si no solicitaste este cambio, ignora este correo.</p>
       <p>Equipo BA</p>
+    `;
+
+    await this.sendMail({ to, subject, html });
+  }
+
+  async sendRegistrationVerificationCode(params: RegistrationVerificationParams): Promise<void> {
+    const { to, name, code, expiresInMinutes } = params;
+    const subject = 'Verification code to complete your registration';
+    const html = `
+      <p>Hello ${name},</p>
+      <p>Thank you for registering with BA. To complete your registration, please use the following verification code:</p>
+      <h2 style="font-size: 32px; letter-spacing: 8px; text-align: center; margin: 20px 0; color: #2563eb;">${code}</h2>
+      <p>This code will expire in ${expiresInMinutes} minutes.</p>
+      <p>If you did not request this registration, please ignore this email.</p>
+      <p>Welcome,</p>
+      <p>BA Team</p>
     `;
 
     await this.sendMail({ to, subject, html });

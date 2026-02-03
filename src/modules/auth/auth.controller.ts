@@ -1,9 +1,11 @@
-import { Controller, Post, UseGuards, Request, HttpCode, HttpStatus, Get, Req, Body } from '@nestjs/common';
+import { Controller, Post, UseGuards, Request, HttpCode, HttpStatus, Get, Req, Body, Delete } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { AuthGuard } from '@nestjs/passport';
 import { RegisterDto } from './dto/register.dto';
 import { RequestPasswordResetDto } from './dto/request-password-reset.dto';
 import { ConfirmPasswordResetDto } from './dto/confirm-password-reset.dto';
+import { RequestRegistrationCodeDto } from './dto/request-registration-code.dto';
+import { ConfirmRegistrationDto } from './dto/confirm-registration.dto';
 @Controller('auth')
 export class AuthController {
     constructor(private authService: AuthService) { }
@@ -61,5 +63,29 @@ export class AuthController {
     @Post('password-reset/confirm')
     async confirmPasswordReset(@Body() confirmPasswordResetDto: ConfirmPasswordResetDto) {
         return this.authService.confirmPasswordReset(confirmPasswordResetDto);
+    }
+
+    @Post('register/request-code')
+    async requestRegistrationCode(@Body() requestRegistrationCodeDto: RequestRegistrationCodeDto) {
+        return this.authService.requestRegistrationCode(requestRegistrationCodeDto);
+    }
+
+    @Post('register/confirm')
+    async confirmRegistration(@Body() confirmRegistrationDto: ConfirmRegistrationDto) {
+        return this.authService.confirmRegistration(confirmRegistrationDto);
+    }
+
+    @UseGuards(AuthGuard('jwt'))
+    @Delete('account')
+    @HttpCode(HttpStatus.OK)
+    async deleteAccount(@Request() req: { user: { userId: string } }) {
+        return this.authService.deleteAccount(req.user.userId);
+    }
+
+    @UseGuards(AuthGuard('jwt'))
+    @Post('account/anonymize')
+    @HttpCode(HttpStatus.OK)
+    async anonymizeAccount(@Request() req: { user: { userId: string } }) {
+        return this.authService.anonymizeAccount(req.user.userId);
     }
 }

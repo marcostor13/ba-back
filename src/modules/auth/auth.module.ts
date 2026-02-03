@@ -9,6 +9,8 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 import { AuthController } from './auth.controller';
 import { RoleModule } from '../role/role.module';
 import { MailModule } from '../mail/mail.module';
+import { CustomerModule } from '../customer/customer.module';
+
 @Module({
   imports: [
     UsersModule,
@@ -19,6 +21,7 @@ import { MailModule } from '../mail/mail.module';
     }),
     RoleModule,
     MailModule,
+    CustomerModule,
   ],
   providers: [AuthService, LocalStrategy, JwtStrategy],
   controllers: [AuthController],

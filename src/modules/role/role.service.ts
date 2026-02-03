@@ -46,4 +46,9 @@ export class RoleService {
   remove(id: string) {
     return this.roleModel.findByIdAndDelete(id);
   }
+
+  removeByUserId(userId: string | Types.ObjectId): Promise<unknown> {
+    const uid = typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
+    return this.roleModel.deleteMany({ userId: uid }).exec();
+  }
 }
