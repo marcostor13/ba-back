@@ -104,7 +104,7 @@ export class QuoteService {
     });
 
     await this.mailService.sendMail({
-      to: ['Cesarg@spicastudio.art', 'marcostor13@gmail.com'],
+      to: ['Cesarg@spicastudio.art', 'marcostor13@gmail.com', 'marketing@bakitchenandbathdesign.com'],
       subject: `New quote #${quoteId} - ${project?.name ?? 'Project'}`,
       html,
       attachments: [
@@ -216,69 +216,67 @@ export class QuoteService {
       <div class="email-root">
         <style>
           .email-root {
-            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            margin: 0;
+            padding: 32px 16px;
             background-color: #EAD1BA; /* Fondo Principal */
-            padding: 40px 20px;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            color: #332F28;
           }
           .card {
-            max-width: 680px;
+            max-width: 720px;
             margin: 0 auto;
             background-color: #FFFFFF;
             border-radius: 12px;
-            padding: 32px 40px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
-            color: #332F28; /* Texto/Oscuro Principal */
+            overflow: hidden;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
           }
-          /* Header Branding */
-          .header-row {
-            display: flex;
-            align-items: center;
-            margin-bottom: 24px;
+          .card-header {
+            background-color: #EAD1BA;
+            padding: 20px 28px;
+            border-bottom: 1px solid #D9BFA0;
           }
-          .header-pill {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 6px 14px;
-            border-radius: 999px;
-            background-color: #3A7344; /* Acento Verde */
-            color: #FFFFFF;
-            font-size: 12px;
-            font-weight: 600;
-            letter-spacing: 0.05em;
+          .brand-title {
+            margin: 0;
+            font-size: 18px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
             text-transform: uppercase;
+            color: #332F28;
           }
-          .brand-dot {
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background-color: #FFFFFF;
+          .brand-subtitle {
+            margin: 4px 0 0;
+            font-size: 12px;
+            letter-spacing: 0.16em;
+            text-transform: uppercase;
+            color: #535353;
           }
-          
+
+          .card-body {
+            padding: 28px 32px 32px;
+          }
+
           .title {
-            margin: 0 0 8px;
-            font-size: 24px;
+            margin: 0 0 6px;
+            font-size: 22px;
             font-weight: 700;
             color: #332F28;
-            letter-spacing: -0.02em;
           }
           .subtitle {
             margin: 0 0 24px;
-            font-size: 14px;
-            color: #535353; /* Texto Secundario */
-            line-height: 1.5;
+            font-size: 13px;
+            color: #535353;
+            line-height: 1.6;
           }
 
-          /* Summary Grid */
           .summary-grid {
             display: grid;
-            grid-template-columns: repeat(2, 1fr);
+            grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 16px 24px;
-            margin-bottom: 32px;
-            padding: 20px;
-            background-color: #F9F5F1; /* Tono muy suave tierra/blanco */
-            border: 1px solid #EAD1BA;
-            border-radius: 8px;
+            margin-bottom: 28px;
+            padding: 18px 20px;
+            background-color: #F9F5F1;
+            border-radius: 10px;
+            border: 1px solid #E0C9AF;
           }
           .summary-item {
             display: flex;
@@ -288,8 +286,8 @@ export class QuoteService {
             font-size: 11px;
             text-transform: uppercase;
             letter-spacing: 0.08em;
-            color: #997A63; /* Acento Secundario */
-            margin-bottom: 4px;
+            color: #997A63;
+            margin-bottom: 2px;
             font-weight: 600;
           }
           .summary-value {
@@ -297,59 +295,58 @@ export class QuoteService {
             font-weight: 600;
             color: #332F28;
           }
+          .summary-value-total {
+            color: #3A7344;
+            font-size: 16px;
+          }
 
-          /* Sections */
           .section {
-            margin-top: 32px;
-            padding-top: 24px;
+            margin-top: 24px;
+            padding-top: 20px;
             border-top: 1px solid #EAD1BA;
           }
           .section-title {
-            margin: 0 0 16px;
-            font-size: 13px;
+            margin: 0 0 14px;
+            font-size: 12px;
             font-weight: 700;
-            letter-spacing: 0.1em;
+            letter-spacing: 0.12em;
             text-transform: uppercase;
             color: #332F28;
           }
-          
-          /* Lists & Text */
+
           .info-list {
             list-style: none;
             padding: 0;
             margin: 0;
           }
           .info-list li {
-            padding: 6px 0;
-            font-size: 14px;
+            padding: 4px 0;
+            font-size: 13px;
             color: #332F28;
-            border-bottom: 1px dashed #E0E0E0;
-          }
-          .info-list li:last-child {
-            border-bottom: none;
           }
           .label {
             font-weight: 600;
             color: #997A63;
             margin-right: 6px;
-            font-size: 12px;
+            font-size: 11px;
             text-transform: uppercase;
+            letter-spacing: 0.06em;
           }
           .value {
             color: #332F28;
           }
           .paragraph {
-            font-size: 14px;
-            line-height: 1.6;
+            font-size: 13px;
+            line-height: 1.7;
             color: #332F28;
             margin: 0;
           }
 
-          /* Files Grid */
           .files-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 12px;
+            gap: 10px;
+            margin-top: 4px;
           }
           .file-card {
             display: flex;
@@ -360,111 +357,110 @@ export class QuoteService {
             background-color: #F5F5F5;
             border: 1px solid #E0E0E0;
             border-radius: 8px;
-            padding: 16px;
-            transition: background-color 0.2s;
-          }
-          .file-card:hover {
-            background-color: #EAD1BA;
-            border-color: #997A63;
+            padding: 12px;
           }
           .file-icon {
-            font-size: 24px;
-            margin-bottom: 8px;
+            font-size: 22px;
+            margin-bottom: 6px;
           }
           .file-label {
             font-size: 12px;
             font-weight: 600;
             color: #332F28;
             text-align: center;
-            margin-bottom: 4px;
+            margin-bottom: 2px;
           }
           .file-action {
             font-size: 10px;
             color: #3A7344;
             text-transform: uppercase;
             font-weight: 700;
+            letter-spacing: 0.08em;
           }
 
           .divider {
-            margin: 24px 0;
-            border-top: 1px dashed #997A63;
-            opacity: 0.3;
+            margin: 22px 0;
+            border-top: 1px dashed #D0BBA4;
           }
 
           @media (max-width: 600px) {
-            .card { padding: 24px; }
-            .summary-grid { grid-template-columns: 1fr; }
+            .card-body {
+              padding: 20px 18px 22px;
+            }
+            .summary-grid {
+              grid-template-columns: 1fr;
+            }
           }
         </style>
 
         <div class="card">
-          <div class="header-row">
-            <div class="header-pill">
-              <span class="brand-dot"></span>
-              <span>BA Kitchen &amp; Bath Design</span>
-            </div>
-          </div>
-          
-          <h2 class="title">New Quote Created</h2>
-          <p class="subtitle">
-            A new project quote has been generated successfully. Please review the details below.
-          </p>
-
-          <div class="summary-grid">
-            <div class="summary-item">
-              <span class="summary-label">Quote ID</span>
-              <span class="summary-value">${quoteId}</span>
-            </div>
-            <div class="summary-item">
-              <span class="summary-label">Total Price</span>
-              <span class="summary-value" style="color: #3A7344;">$${quote.totalPrice.toFixed(2)}</span>
-            </div>
-            <div class="summary-item">
-              <span class="summary-label">Company</span>
-              <span class="summary-value">${companyName}</span>
-            </div>
-            <div class="summary-item">
-              <span class="summary-label">Project</span>
-              <span class="summary-value">${projectName}</span>
-            </div>
-            <div class="summary-item">
-              <span class="summary-label">Category</span>
-              <span class="summary-value">${quote.category}</span>
-            </div>
-            <div class="summary-item">
-              <span class="summary-label">Status</span>
-              <span class="summary-value">${quote.status}</span>
-            </div>
+          <div class="card-header">
+            <h1 class="brand-title">BA Kitchen &amp; Bath Design</h1>
+            <p class="brand-subtitle">PROFESSIONAL ESTIMATE REPORT</p>
           </div>
 
-          <div class="section">
-            <h3 class="section-title">CUSTOMER</h3>
-            <ul class="info-list">
-              <li><span class="label">Name</span> <span class="value">${customerName}</span></li>
-              <li><span class="label">Email</span> <span class="value">${customerEmail}</span></li>
-            </ul>
+          <div class="card-body">
+            <h2 class="title">New Professional Estimate Created</h2>
+            <p class="subtitle">
+              A new professional estimate report has been generated for this project. Below you will find a summary of the key details. The attached PDF contains the full client-ready document.
+            </p>
+
+            <div class="summary-grid">
+              <div class="summary-item">
+                <span class="summary-label">Quote ID</span>
+                <span class="summary-value">${quoteId}</span>
+              </div>
+              <div class="summary-item">
+                <span class="summary-label">Total Price</span>
+                <span class="summary-value summary-value-total">$${quote.totalPrice.toFixed(2)}</span>
+              </div>
+              <div class="summary-item">
+                <span class="summary-label">Company</span>
+                <span class="summary-value">${companyName}</span>
+              </div>
+              <div class="summary-item">
+                <span class="summary-label">Project</span>
+                <span class="summary-value">${projectName}</span>
+              </div>
+              <div class="summary-item">
+                <span class="summary-label">Category</span>
+                <span class="summary-value">${quote.category}</span>
+              </div>
+              <div class="summary-item">
+                <span class="summary-label">Status</span>
+                <span class="summary-value">${quote.status}</span>
+              </div>
+            </div>
+
+            <div class="section">
+              <h3 class="section-title">Customer</h3>
+              <ul class="info-list">
+                <li><span class="label">Name</span><span class="value">${customerName}</span></li>
+                <li><span class="label">Email</span><span class="value">${customerEmail}</span></li>
+              </ul>
+            </div>
+
+            <div class="section">
+              <h3 class="section-title">Experience / Scope</h3>
+              <p class="paragraph">${quote.experience || 'No experience description provided.'}</p>
+            </div>
+
+            <div class="section">
+              <h3 class="section-title">Materials</h3>
+              <ul class="info-list">
+                ${materialsItems}
+              </ul>
+            </div>
+
+            ${filesSection}
+
+            <div class="section">
+              <h3 class="section-title">Notes</h3>
+              ${notes}
+            </div>
+
+            ${detailsSections}
           </div>
-
-          <div class="section">
-            <h3 class="section-title">EXPERIENCE / SCOPE</h3>
-            <p class="paragraph">${quote.experience}</p>
-          </div>
-
-          <div class="section">
-            <h3 class="section-title">MATERIALS</h3>
-            <ul class="info-list">
-              ${materialsItems}
-            </ul>
-          </div>
-
-          ${filesSection}
-
-          <div class="section">
-            <h3 class="section-title">NOTES</h3>
-            ${notes}
-          </div>
-
-          ${detailsSections}
         </div>
       </div>
     `;
@@ -506,57 +502,446 @@ export class QuoteService {
   }): Promise<Buffer> {
     const { quote, quoteId, project, customer, company } = params;
 
+    const primaryGreen = '#3A7344';
+    const darkCharcoal = '#332F28';
+    const lightSand = '#EAD1BA';
+
+    const customerName = customer ? `${customer.name} ${customer.lastName}`.trim() : 'N/A';
+    const customerEmail = customer?.email ?? 'N/A';
+    const customerPhone = (customer as any)?.phone ?? 'N/A';
+    const experience = quote.experience || 'N/A';
+    const status = quote.status;
+    const creationDate = (quote as any)?.createdAt
+      ? new Date((quote as any).createdAt).toLocaleDateString()
+      : new Date().toLocaleDateString();
+
+    const categoryLabel = quote.category?.toUpperCase?.() ?? 'ESTIMATE';
+
+    const isInternalView = true; // Actualmente solo se envía a correos internos
+
     return new Promise<Buffer>((resolve, reject) => {
-      const doc = new PDFDocument({ margin: 40 });
+      // pdfkit tiene muchas APIs útiles (page, save, restore, etc.) que no están
+      // completamente tipadas en nuestra declaración mínima. Usamos `any` para
+      // poder aprovecharlas sin romper el tipado global.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const doc: any = new (PDFDocument as any)({ margin: 40, bufferPages: true });
       const chunks: Buffer[] = [];
 
       doc.on('data', (chunk: Buffer) => chunks.push(chunk));
       doc.on('end', () => resolve(Buffer.concat(chunks)));
       doc.on('error', (err: Error) => reject(err));
 
-      // Fondo conceptual: se recomienda exportar sobre fondo claro, pero los visores de PDF
-      // no soportan un "fondo global" estándar; mantenemos la jerarquía tipográfica.
-      doc.fontSize(18).text('BA Kitchen & Bath Design - Quote Summary', { underline: true });
-      doc.moveDown();
+      const drawPageBackground = () => {
+        const { width, height } = doc.page;
+        doc.save();
+        doc.fillColor(lightSand);
+        doc.rect(0, 0, width, height).fill();
+        doc.fillColor(darkCharcoal); // Restaurar color de texto por defecto
+        doc.restore();
+      };
 
-      doc.fontSize(12).text(`Quote ID: ${quoteId}`);
-      doc.text(`Company: ${(company as any)?.name ?? 'N/A'}`);
-      doc.text(`Project: ${project?.name ?? 'N/A'}`);
-      doc.text(`Category: ${quote.category}`);
-      doc.text(`Status: ${quote.status}`);
-      doc.text(`Version: ${quote.versionNumber}`);
-      doc.text(`Total Price: $${quote.totalPrice.toFixed(2)}`);
-      doc.moveDown();
-
-      doc.fontSize(14).text('CUSTOMER', { underline: true });
-      doc.moveDown(0.5);
-      const customerName = customer ? `${customer.name} ${customer.lastName}`.trim() : 'N/A';
-      doc.fontSize(12).text(`Name: ${customerName}`);
-      doc.text(`Email: ${customer?.email ?? 'N/A'}`);
-      doc.moveDown();
-
-      doc.fontSize(14).text('EXPERIENCE / SCOPE SUMMARY', { underline: true });
-      doc.moveDown(0.5);
-      doc.fontSize(12).text(quote.experience || 'N/A');
-      doc.moveDown();
-
-      doc.fontSize(14).text('MATERIALS', { underline: true });
-      doc.moveDown(0.5);
-      if (quote.materials?.items?.length) {
-        quote.materials.items.forEach((item) => {
-          doc.text(`- ${item.quantity} x ${item.description}`);
+      const drawFooter = (pageNumber: number, pageCount: number) => {
+        const { width, height, margins } = doc.page;
+        const footerText = `Page ${pageNumber} of ${pageCount} - Generated on ${new Date().toLocaleDateString()}`;
+        doc.save();
+        doc.fontSize(8);
+        doc.fillColor('#535353');
+        doc.text(footerText, margins.left, height - margins.bottom + 10, {
+          width: width - margins.left - margins.right,
+          align: 'center',
         });
-      } else {
-        doc.text('- No specific materials listed.');
+        doc.restore();
+      };
+
+      const pageWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+
+      // Helper: heading bar for sections
+      const drawSectionBar = (label: string, yOffset?: number) => {
+        const top = yOffset ?? doc.y;
+        const barHeight = 22;
+        doc.save();
+        doc.fillColor(primaryGreen);
+        doc.roundedRect(doc.page.margins.left, top, pageWidth, barHeight, 4).fill();
+        doc.fillColor('#FFFFFF');
+        doc.fontSize(11).font('Helvetica-Bold');
+        doc.text(label.toUpperCase(), doc.page.margins.left + 10, top + 5, {
+          width: pageWidth - 20,
+          align: 'left',
+        });
+        doc.restore();
+        doc.fillColor(darkCharcoal); // Restaurar color de texto por defecto
+        doc.moveDown(1.8);
+      };
+
+      // Helper: information card
+      const drawInfoCard = (title: string, lines: string[]) => {
+        const cardMargin = 6;
+        const startX = doc.page.margins.left;
+        const startY = doc.y;
+
+        const cardWidth = pageWidth;
+        const estimatedHeight = 100; // Altura estimada inicial
+
+        // Dibujar fondo blanco de la tarjeta
+        doc.save();
+        doc.fillColor('#FFFFFF');
+        doc.roundedRect(startX, startY, cardWidth, estimatedHeight, 8).fill();
+        doc.restore();
+
+        // Calcular altura real del contenido
+        doc.save();
+        doc.font('Helvetica-Bold').fontSize(11);
+        const titleHeight = doc.heightOfString(title.toUpperCase(), { width: cardWidth - cardMargin * 2 });
+        doc.font('Helvetica').fontSize(10);
+        let contentHeight = titleHeight + 6; // espacio después del título
+        lines.forEach((line) => {
+          contentHeight += doc.heightOfString(line, { width: cardWidth - cardMargin * 2 }) + 4;
+        });
+        doc.restore();
+
+        const actualHeight = contentHeight + cardMargin * 2 + 8;
+
+        // Redibujar fondo con altura correcta
+        doc.save();
+        doc.fillColor('#FFFFFF');
+        doc.roundedRect(startX, startY, cardWidth, actualHeight, 8).fill();
+        doc.restore();
+
+        // Dibujar texto
+        doc.save();
+        doc.fillColor(darkCharcoal);
+        doc.font('Helvetica-Bold').fontSize(11);
+        doc.text(title.toUpperCase(), startX + cardMargin, startY + cardMargin, {
+          width: cardWidth - cardMargin * 2,
+        });
+        
+        let textY = startY + cardMargin + titleHeight + 6;
+        doc.font('Helvetica').fontSize(10);
+        lines.forEach((line) => {
+          doc.text(line, startX + cardMargin, textY, {
+            width: cardWidth - cardMargin * 2,
+          });
+          textY += doc.heightOfString(line, { width: cardWidth - cardMargin * 2 }) + 4;
+        });
+        doc.restore();
+
+        // Dibujar borde
+        doc.save();
+        doc.roundedRect(startX, startY, cardWidth, actualHeight, 8)
+          .lineWidth(0.5)
+          .strokeColor('#D0BBA4')
+          .stroke();
+        doc.restore();
+
+        doc.y = startY + actualHeight + 12;
+        doc.fillColor(darkCharcoal); // Asegurar color de texto para siguiente contenido
+      };
+
+      const drawTotalCard = (total: number) => {
+        const cardHeight = 70;
+        const startX = doc.page.margins.left;
+        const startY = doc.y;
+
+        doc.save();
+        doc.fillColor(primaryGreen);
+        doc.roundedRect(startX, startY, pageWidth, cardHeight, 10)
+          .fill()
+          .strokeColor('#2b5733')
+          .lineWidth(1)
+          .stroke();
+
+        doc.fillColor('#FFFFFF');
+        doc.font('Helvetica-Bold').fontSize(10);
+        doc.text('TOTAL ESTIMATE', startX + 16, startY + 14, {
+          width: pageWidth - 32,
+          align: 'left',
+        });
+
+        doc.fontSize(22);
+        doc.text(`$ ${total.toFixed(2)}`, startX + 16, startY + 30, {
+          width: pageWidth - 32,
+          align: 'left',
+        });
+        doc.restore();
+
+        doc.y = startY + cardHeight + 16;
+        doc.fillColor(darkCharcoal); // Restaurar color de texto por defecto
+      };
+
+      const drawKeyValueTable = (
+        title: string,
+        rows: Array<{ item: string; value: string | number | boolean; linkUrl?: string }>,
+      ) => {
+        if (!rows.length) return;
+
+        drawSectionBar(title);
+
+        const tableX = doc.page.margins.left;
+        const tableY = doc.y;
+        const itemColWidth = pageWidth * 0.65;
+        const valueColWidth = pageWidth - itemColWidth;
+
+        const rowHeight = 18;
+        let currentY = tableY;
+
+        doc.font('Helvetica-Bold').fontSize(9);
+        doc.fillColor(darkCharcoal);
+        doc.text('Item', tableX + 6, currentY + 4, { width: itemColWidth - 12 });
+        doc.text('Value', tableX + itemColWidth + 6, currentY + 4, {
+          width: valueColWidth - 12,
+        });
+        doc.rect(tableX, currentY, pageWidth, rowHeight).strokeColor('#C7B39C').lineWidth(0.5).stroke();
+
+        currentY += rowHeight;
+
+        doc.font('Helvetica').fontSize(9);
+
+        rows.forEach((row, index) => {
+          const isEven = index % 2 === 1;
+          if (currentY + rowHeight > doc.page.height - doc.page.margins.bottom - 40) {
+            doc.addPage();
+            drawPageBackground();
+            currentY = doc.page.margins.top;
+          }
+
+          doc.save();
+          if (isEven) {
+            doc.fillColor('#F7EEE5');
+          } else {
+            doc.fillColor('#FFFFFF');
+          }
+          doc.rect(tableX, currentY, pageWidth, rowHeight).fill();
+          doc.restore();
+
+          doc.save();
+          doc.fillColor(darkCharcoal);
+          doc.text(row.item, tableX + 6, currentY + 4, { width: itemColWidth - 12 });
+          const valueText = String(row.value);
+          if (row.linkUrl) {
+            doc.text(valueText, tableX + itemColWidth + 6, currentY + 4, {
+              width: valueColWidth - 12,
+              link: row.linkUrl,
+              underline: true,
+            });
+          } else {
+            doc.text(valueText, tableX + itemColWidth + 6, currentY + 4, {
+              width: valueColWidth - 12,
+            });
+          }
+          doc.restore();
+
+          currentY += rowHeight;
+        });
+
+        doc.y = currentY + 12;
+      };
+
+      const buildKeyValueRows = (data?: Record<string, unknown>) => {
+        if (!data) {
+          return [] as Array<{ item: string; value: string | number | boolean; linkUrl?: string }>;
+        }
+        const entries = Object.entries(data).filter(
+          ([, value]) =>
+            value !== undefined && value !== null && value !== '' && value !== false,
+        );
+        const rows: Array<{ item: string; value: string | number | boolean; linkUrl?: string }> = [];
+
+        entries.forEach(([key, value]) => {
+          // Arrays de URLs (ej. archivos)
+          if (Array.isArray(value) && value.length && typeof value[0] === 'string') {
+            (value as string[]).forEach((url, index) => {
+              rows.push({
+                item: `${key} ${index + 1}`,
+                value: 'View',
+                linkUrl: url,
+              });
+            });
+            return;
+          }
+
+          // Valor tipo URL string
+          if (typeof value === 'string' && /^https?:\/\//i.test(value)) {
+            rows.push({
+              item: key,
+              value: 'View',
+              linkUrl: value,
+            });
+            return;
+          }
+
+          // Objetos complejos (evitar [object Object] en tabla genérica)
+          if (typeof value === 'object') {
+            // De momento se ignoran aquí; se pueden representar en secciones específicas.
+            return;
+          }
+
+          rows.push({
+            item: key,
+            value: typeof value === 'number' || typeof value === 'boolean' ? value : String(value),
+          });
+        });
+
+        return rows;
+      };
+
+      // First page background
+      drawPageBackground();
+
+      // === HEADER / COVER ===
+      const headerHeight = 70;
+      doc.save();
+      doc.fillColor(lightSand);
+      doc.rect(doc.page.margins.left * 0.5, doc.page.margins.top * 0.5, doc.page.width - doc.page.margins.left, headerHeight)
+        .fill();
+      doc.restore();
+
+      doc.save();
+      doc.fillColor(darkCharcoal);
+      doc.font('Helvetica-Bold').fontSize(26);
+      doc.text('BA Kitchen & Bath Design', doc.page.margins.left, doc.page.margins.top + 10, {
+        width: pageWidth,
+        align: 'center',
+      });
+
+      doc.fontSize(13);
+      doc.text('PROFESSIONAL ESTIMATE REPORT', doc.page.margins.left, doc.page.margins.top + 40, {
+        width: pageWidth,
+        align: 'center',
+      });
+      doc.restore();
+      doc.fillColor(darkCharcoal); // Asegurar color de texto por defecto
+
+      // Thin green line
+      doc.save();
+      doc.moveTo(doc.page.margins.left, doc.page.margins.top + headerHeight + 10)
+        .lineTo(doc.page.margins.left + pageWidth, doc.page.margins.top + headerHeight + 10)
+        .strokeColor(primaryGreen)
+        .lineWidth(2)
+        .stroke();
+      doc.restore();
+
+      doc.y = doc.page.margins.top + headerHeight + 30;
+
+      // === ESTIMATE TITLE BAR ===
+      const barHeight = 26;
+      const barWidth = pageWidth * 0.8;
+      const barX = doc.page.margins.left + (pageWidth - barWidth) / 2;
+      const barY = doc.y;
+      doc.save();
+      doc.fillColor(primaryGreen);
+      doc.roundedRect(barX, barY, barWidth, barHeight, 12).fill();
+      doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(12);
+      doc.text(
+        `Estimate v${quote.versionNumber} - ${categoryLabel}`,
+        barX,
+        barY + 6,
+        { width: barWidth, align: 'center' },
+      );
+      doc.restore();
+      doc.fillColor(darkCharcoal); // Restaurar color de texto por defecto
+
+      doc.y = barY + barHeight + 24;
+
+      // === MAIN INFO BLOCKS ===
+      drawInfoCard('CUSTOMER INFORMATION', [
+        `Name: ${customerName}`,
+        `Email: ${customerEmail}`,
+        `Phone: ${customerPhone}`,
+      ]);
+
+      drawInfoCard('PROJECT DETAILS', [
+        `Experience: ${experience}`,
+        `Status: ${status}`,
+        `Date: ${creationDate}`,
+        `Project: ${project?.name ?? 'N/A'}`,
+      ]);
+
+      // === TOTAL HIGHLIGHT ===
+      drawTotalCard(quote.totalPrice);
+
+      // === NOTES (INTERNAL ONLY) ===
+      if (isInternalView) {
+        const notesText = quote.notes || 'No additional notes.';
+        drawSectionBar('Notes');
+        doc.save();
+        doc.fillColor('#FFFFFF');
+        doc.roundedRect(doc.page.margins.left, doc.y, pageWidth, 80, 8)
+          .fill()
+          .strokeColor('#D0BBA4')
+          .lineWidth(0.5)
+          .stroke();
+        doc.restore();
+
+        doc.save();
+        doc.font('Helvetica').fontSize(10).fillColor(darkCharcoal);
+        doc.text(notesText, doc.page.margins.left + 10, doc.y + 10, {
+          width: pageWidth - 20,
+          align: 'left',
+        });
+        doc.restore();
+        doc.fillColor(darkCharcoal); // Restaurar color de texto
+
+        doc.y += 80 + 16;
       }
-      doc.moveDown();
 
-      doc.fontSize(14).text('NOTES', { underline: true });
-      doc.moveDown(0.5);
-      doc.fontSize(12).text(quote.notes || 'No additional notes.');
-      doc.moveDown();
+      // === CATEGORY INFORMATION SECTION ===
+      const categoryTitle =
+        quote.category === QuoteCategory.KITCHEN
+          ? 'KITCHEN INFORMATION'
+          : quote.category === QuoteCategory.BATHROOM
+            ? 'BATHROOM INFORMATION'
+            : quote.category === QuoteCategory.BASEMENT
+              ? 'BASEMENT INFORMATION'
+              : quote.category === QuoteCategory.ADDITIONAL_WORK
+                ? 'ADDITIONAL WORK INFORMATION'
+                : 'ESTIMATE INFORMATION';
 
-      // --- ATTACHMENTS & FILES SECTION (PDF) ---
+      drawSectionBar(categoryTitle);
+
+      const infoBlocks: Array<{ title: string; data?: Record<string, unknown> }> = [];
+      if (quote.kitchenInformation) {
+        infoBlocks.push({
+          title: 'Kitchen Details',
+          data: quote.kitchenInformation as Record<string, unknown>,
+        });
+      }
+      if (quote.bathroomInformation) {
+        infoBlocks.push({
+          title: 'Bathroom Details',
+          data: quote.bathroomInformation as Record<string, unknown>,
+        });
+      }
+      if (quote.basementInformation) {
+        infoBlocks.push({
+          title: 'Basement Details',
+          data: quote.basementInformation as Record<string, unknown>,
+        });
+      }
+      if (quote.additionalWorkInformation) {
+        infoBlocks.push({
+          title: 'Additional Work Details',
+          data: quote.additionalWorkInformation as Record<string, unknown>,
+        });
+      }
+
+      infoBlocks.forEach((block, index) => {
+        if (doc.y > doc.page.height - doc.page.margins.bottom - 120) {
+          doc.addPage();
+          drawPageBackground();
+        }
+
+        drawSectionBar(block.title, doc.y);
+        const rows = buildKeyValueRows(block.data);
+        if (rows.length) {
+          drawKeyValueTable(block.title, rows);
+        }
+
+        if (index < infoBlocks.length - 1) {
+          doc.moveDown(1);
+        }
+      });
+
+      // === FILES & MATERIALS SECTIONS ===
       const allFiles: { label: string; url: string }[] = [];
       if (quote.countertopsFiles?.length) {
         quote.countertopsFiles.forEach((url, index) => {
@@ -572,44 +957,70 @@ export class QuoteService {
         allFiles.push({ label: 'Materials File', url: quote.materials.file });
       }
 
-      if (allFiles.length > 0) {
-        doc.fontSize(14).text('ATTACHMENTS & FILES', { underline: true });
-        doc.moveDown(0.5);
-        allFiles.forEach((file) => {
-          doc
-            .fontSize(12)
-            .fillColor('blue')
-            .text('- ' + file.label + ' (Click to open)', {
-              link: file.url,
-              underline: true,
-            });
-        });
-        doc.fillColor('black'); // Reset color
-        doc.moveDown();
+      if (allFiles.length || quote.materials?.items?.length) {
+        if (doc.y > doc.page.height - doc.page.margins.bottom - 140) {
+          doc.addPage();
+          drawPageBackground();
+        }
       }
 
-      const addSection = (title: string, data?: Record<string, unknown>) => {
-        if (!data) return;
-        const entries = Object.entries(data).filter(
-          ([, value]) =>
-            value !== undefined && value !== null && value !== '' && value !== false,
-        );
-        if (!entries.length) return;
-
-        doc.addPage();
-        doc.fontSize(14).text(title.toUpperCase(), { underline: true });
-        doc.moveDown(0.5);
-        doc.fontSize(12);
-        entries.forEach(([key, value]) => {
-          doc.text('- ' + key + ': ' + String(value));
+      if (allFiles.length) {
+        drawSectionBar('Files & Attachments');
+        doc.font('Helvetica').fontSize(9).fillColor(darkCharcoal);
+        allFiles.forEach((file) => {
+          doc
+            .fillColor(primaryGreen)
+            .text(`${file.label}: View`, {
+              link: file.url,
+              underline: true,
+            })
+            .fillColor(darkCharcoal);
+          doc.moveDown(0.2);
         });
-        doc.moveDown();
-      };
+      }
 
-      addSection('Kitchen Information', quote.kitchenInformation as Record<string, unknown> | undefined);
-      addSection('Bathroom Information', quote.bathroomInformation as Record<string, unknown> | undefined);
-      addSection('Basement Information', quote.basementInformation as Record<string, unknown> | undefined);
-      addSection('Additional Work Information', quote.additionalWorkInformation as Record<string, unknown> | undefined);
+      if (quote.materials?.items?.length) {
+        drawSectionBar('Materials');
+        const materialRows = quote.materials.items.map((m) => ({
+          item: String(m.quantity),
+          value: m.description,
+        }));
+        drawKeyValueTable('Materials', materialRows);
+      }
+
+      // === INTERNAL ONLY: ADDITIONAL COMMENTS & AUDIO NOTES PLACEHOLDER ===
+      if (isInternalView) {
+        if (doc.y > doc.page.height - doc.page.margins.bottom - 140) {
+          doc.addPage();
+          drawPageBackground();
+        }
+
+        drawSectionBar('Additional Comments & Media');
+        doc.font('Helvetica').fontSize(9).fillColor(darkCharcoal);
+        doc.text(
+          'Internal section reserved for design team comments, sketches, drawings and associated media. (To be extended with concrete data when available).',
+          {
+            width: pageWidth,
+          },
+        );
+        doc.moveDown(2);
+
+        drawSectionBar('Audio Notes');
+        doc.text(
+          'Internal section listing audio notes, summaries and transcriptions (if provided for this estimate).',
+          {
+            width: pageWidth,
+          },
+        );
+      }
+
+      // === FOOTERS FOR ALL PAGES ===
+      // El fondo ya se dibuja al crear cada página; aquí solo añadimos el footer
+      const pageRange = doc.bufferedPageRange();
+      for (let i = pageRange.start; i < pageRange.start + pageRange.count; i += 1) {
+        doc.switchToPage(i);
+        drawFooter(i - pageRange.start + 1, pageRange.count);
+      }
 
       doc.end();
     });
