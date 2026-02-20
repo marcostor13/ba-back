@@ -1,0 +1,181 @@
+{
+  "info": {
+    "name": "BA Backend - Crear Usuario",
+    "description": "Ejemplos de endpoints para crear usuarios",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Registro Directo (Legacy)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"usuario@example.com\",\n  \"password\": \"password123\",\n  \"name\": \"Juan Pérez\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:3022/auth/register",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3022",
+          "path": ["auth", "register"]
+        },
+        "description": "Registro directo sin verificación por email. Crea el usuario inmediatamente y retorna el JWT token.\n\n**Campos requeridos:**\n- `email`: Email válido del usuario\n- `password`: Mínimo 6 caracteres\n- `name`: Nombre completo del usuario\n\n**Respuesta exitosa:**\n```json\n{\n  \"access_token\": \"jwt_token_here\",\n  \"user\": {\n    \"id\": \"user_id\",\n    \"email\": \"usuario@example.com\",\n    \"name\": \"Juan Pérez\",\n    \"role\": \"customer\"\n  }\n}\n```"
+      },
+      "response": [
+        {
+          "name": "Ejemplo de respuesta exitosa",
+          "originalRequest": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"usuario@example.com\",\n  \"password\": \"password123\",\n  \"name\": \"Juan Pérez\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:3022/auth/register",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "3022",
+              "path": ["auth", "register"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "cookie": [],
+          "body": "{\n  \"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...\",\n  \"user\": {\n    \"id\": \"507f1f77bcf86cd799439011\",\n    \"email\": \"usuario@example.com\",\n    \"name\": \"Juan Pérez\",\n    \"role\": \"customer\"\n  }\n}"
+        }
+      ]
+    },
+    {
+      "name": "Registro con Verificación - Paso 1: Solicitar Código",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"usuario@example.com\",\n  \"password\": \"password123\",\n  \"name\": \"Juan Pérez\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:3022/auth/register/request-code",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3022",
+          "path": ["auth", "register", "request-code"]
+        },
+        "description": "Primer paso del flujo de registro con verificación por email. Envía un código de 6 dígitos al correo del usuario.\n\n**Campos requeridos:**\n- `email`: Email válido del usuario\n- `password`: Mínimo 6 caracteres\n- `name`: Nombre completo del usuario\n\n**Respuesta exitosa:**\n```json\n{\n  \"message\": \"Código de verificación enviado al correo electrónico\"\n}\n```\n\n**Nota:** El código expira en 15 minutos."
+      },
+      "response": [
+        {
+          "name": "Ejemplo de respuesta exitosa",
+          "originalRequest": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"usuario@example.com\",\n  \"password\": \"password123\",\n  \"name\": \"Juan Pérez\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:3022/auth/register/request-code",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "3022",
+              "path": ["auth", "register", "request-code"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "cookie": [],
+          "body": "{\n  \"message\": \"Código de verificación enviado al correo electrónico\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "Registro con Verificación - Paso 2: Confirmar Código",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"usuario@example.com\",\n  \"code\": \"123456\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:3022/auth/register/confirm",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3022",
+          "path": ["auth", "register", "confirm"]
+        },
+        "description": "Segundo paso del flujo de registro con verificación. Confirma el código recibido por email y completa el registro.\n\n**Campos requeridos:**\n- `email`: El mismo email usado en el paso 1\n- `code`: Código de 6 dígitos recibido por email\n\n**Respuesta exitosa:**\n```json\n{\n  \"access_token\": \"jwt_token_here\",\n  \"user\": {\n    \"id\": \"user_id\",\n    \"email\": \"usuario@example.com\",\n    \"name\": \"Juan Pérez\",\n    \"role\": \"customer\"\n  }\n}\n```"
+      },
+      "response": [
+        {
+          "name": "Ejemplo de respuesta exitosa",
+          "originalRequest": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"usuario@example.com\",\n  \"code\": \"123456\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:3022/auth/register/confirm",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "3022",
+              "path": ["auth", "register", "confirm"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "cookie": [],
+          "body": "{\n  \"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...\",\n  \"user\": {\n    \"id\": \"507f1f77bcf86cd799439011\",\n    \"email\": \"usuario@example.com\",\n    \"name\": \"Juan Pérez\",\n    \"role\": \"customer\"\n  }\n}"
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3022",
+      "type": "string"
+    }
+  ]
+}

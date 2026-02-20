@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
 import { Customer, CustomerDocument } from './entities/customer.entity';
@@ -11,6 +11,8 @@ import { MailService } from '../mail/mail.service';
 
 @Injectable()
 export class CustomerService {
+  private readonly logger = new Logger(CustomerService.name);
+
   constructor(
     @InjectModel(Customer.name) private customerModel: Model<CustomerDocument>,
     private readonly usersService: UsersService,
@@ -56,11 +58,20 @@ export class CustomerService {
     try {
       const customer = await this.customerModel.create(customerData);
       await this.roleService.create({ name: 'customer', userId: user._id });
-      await this.mailService.sendCustomerWelcomeCredentials({
-        to: normalizedEmail,
-        name: fullName,
-        tempPassword,
-      });
+
+      try {
+        await this.mailService.sendCustomerWelcomeCredentials({
+          to: normalizedEmail,
+          name: fullName,
+          tempPassword,
+        });
+      } catch (mailError: unknown) {
+        this.logger.warn(
+          `Cliente creado pero no se pudo enviar el correo de bienvenida a ${normalizedEmail}. ` +
+            `Use "Restablecer contraseña" desde el login o revise la configuración SMTP. Error: ${mailError instanceof Error ? mailError.message : String(mailError)}`,
+        );
+      }
+
       return customer;
     } catch (error) {
       await this.usersService.deleteById(user._id);

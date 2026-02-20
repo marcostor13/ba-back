@@ -1,0 +1,151 @@
+{
+  "info": {
+    "name": "BA Backend - Crear Customer",
+    "description": "Endpoint para crear un nuevo cliente (customer) en el sistema",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Crear Customer - Ejemplo Completo",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Juan\",\n  \"lastName\": \"Pérez\",\n  \"email\": \"juan.perez@example.com\",\n  \"phone\": \"+1 234 567 8900\",\n  \"address\": \"123 Main Street\",\n  \"city\": \"Miami\",\n  \"state\": \"FL\",\n  \"zipCode\": \"33101\",\n  \"leadSource\": \"Website\",\n  \"description\": \"Cliente interesado en remodelación de cocina\",\n  \"date\": \"2026-01-28T00:00:00.000Z\",\n  \"companyId\": \"507f1f77bcf86cd799439011\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:3022/customer",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3022",
+          "path": ["customer"]
+        },
+        "description": "Crea un nuevo cliente en el sistema. **El único campo requerido es `email`**. Todos los demás campos son opcionales.\n\n**Comportamiento:**\n- Se crea automáticamente un usuario en el sistema con el email proporcionado\n- Se genera una contraseña temporal que se envía por correo electrónico al cliente\n- Se asigna automáticamente el rol \"customer\" al usuario\n- El cliente puede usar esa contraseña temporal para iniciar sesión y cambiarla\n\n**Campos:**\n- `email` (requerido): Email válido del cliente (se normaliza a minúsculas)\n- `name` (opcional): Nombre del cliente\n- `lastName` (opcional): Apellido del cliente\n- `phone` (opcional): Teléfono de contacto\n- `address` (opcional): Dirección\n- `city` (opcional): Ciudad\n- `state` (opcional): Estado/Provincia\n- `zipCode` (opcional): Código postal\n- `leadSource` (opcional): Origen del lead (ej: \"Website\", \"Referral\", etc.)\n- `description` (opcional): Descripción o notas adicionales\n- `date` (opcional): Fecha (formato ISO 8601)\n- `companyId` (opcional): ID de MongoDB de la compañía asociada\n\n**Errores posibles:**\n- `400 Bad Request`: Si el email ya está registrado\n- `400 Bad Request`: Si el email no es válido\n- `400 Bad Request`: Si el companyId no es un ObjectId válido"
+      },
+      "response": [
+        {
+          "name": "Ejemplo de respuesta exitosa",
+          "originalRequest": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Juan\",\n  \"lastName\": \"Pérez\",\n  \"email\": \"juan.perez@example.com\",\n  \"phone\": \"+1 234 567 8900\",\n  \"address\": \"123 Main Street\",\n  \"city\": \"Miami\",\n  \"state\": \"FL\",\n  \"zipCode\": \"33101\",\n  \"leadSource\": \"Website\",\n  \"description\": \"Cliente interesado en remodelación de cocina\",\n  \"date\": \"2026-01-28T00:00:00.000Z\",\n  \"companyId\": \"507f1f77bcf86cd799439011\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:3022/customer",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "3022",
+              "path": ["customer"]
+            }
+          },
+          "status": "OK",
+          "code": 201,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "cookie": [],
+          "body": "{\n  \"_id\": \"507f1f77bcf86cd799439011\",\n  \"name\": \"Juan\",\n  \"lastName\": \"Pérez\",\n  \"email\": \"juan.perez@example.com\",\n  \"phone\": \"+1 234 567 8900\",\n  \"address\": \"123 Main Street\",\n  \"city\": \"Miami\",\n  \"state\": \"FL\",\n  \"zipCode\": \"33101\",\n  \"leadSource\": \"Website\",\n  \"description\": \"Cliente interesado en remodelación de cocina\",\n  \"date\": \"2026-01-28T00:00:00.000Z\",\n  \"companyId\": \"507f1f77bcf86cd799439011\",\n  \"userId\": \"507f1f77bcf86cd799439012\",\n  \"createdAt\": \"2026-01-28T12:00:00.000Z\",\n  \"updatedAt\": \"2026-01-28T12:00:00.000Z\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "Crear Customer - Mínimo (Solo Email)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"cliente@example.com\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:3022/customer",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3022",
+          "path": ["customer"]
+        },
+        "description": "Ejemplo mínimo para crear un customer. Solo requiere el campo `email`."
+      },
+      "response": [
+        {
+          "name": "Ejemplo de respuesta exitosa",
+          "originalRequest": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"cliente@example.com\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:3022/customer",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "3022",
+              "path": ["customer"]
+            }
+          },
+          "status": "OK",
+          "code": 201,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "cookie": [],
+          "body": "{\n  \"_id\": \"507f1f77bcf86cd799439011\",\n  \"email\": \"cliente@example.com\",\n  \"userId\": \"507f1f77bcf86cd799439012\",\n  \"createdAt\": \"2026-01-28T12:00:00.000Z\",\n  \"updatedAt\": \"2026-01-28T12:00:00.000Z\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "Crear Customer - Con CompanyId",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"cliente@example.com\",\n  \"name\": \"María\",\n  \"lastName\": \"González\",\n  \"phone\": \"+1 555 123 4567\",\n  \"companyId\": \"507f1f77bcf86cd799439011\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:3022/customer",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3022",
+          "path": ["customer"]
+        },
+        "description": "Ejemplo creando un customer asociado a una compañía específica mediante `companyId`."
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3022",
+      "type": "string"
+    }
+  ]
+}

@@ -56,40 +56,20 @@ export class MailService {
     // Log de configuración (sin mostrar contraseña completa)
     this.logger.log(`SMTP Config - Host: ${host}, Port: ${port}, Secure: ${secure}, User: ${user}, Pass: ${pass ? `${pass.substring(0, 3)}...` : 'NOT SET'}`);
 
-    // Detectar si es Gmail
+    // Detectar si es Gmail/Google (incluye Workspace con dominio propio)
     this.isGmail = host.includes('gmail.com') || host.includes('google');
 
-    // Configurar transporter según el proveedor
-    if (this.isGmail) {
-      // Para Gmail, usar la configuración de servicio (nodemailer maneja host/port automáticamente)
-      this.transporter = nodemailer.createTransport({
-        service: 'gmail',
-        auth: {
-          user,
-          pass,
-        },
-      });
-    } else {
-      // Para otros proveedores SMTP, usar configuración manual
-      this.transporter = nodemailer.createTransport({
-        host,
-        port,
-        secure,
-        auth: {
-          user,
-          pass,
-        },
-      });
-    }
+    // Usar siempre configuración explícita (host, port, auth). Con Workspace suele funcionar mejor que service: 'gmail'.
+    this.transporter = nodemailer.createTransport({
+      host,
+      port,
+      secure,
+      auth: { user, pass },
+      ...(port === 587 && !secure && { requireTLS: true }),
+    });
 
-    // Validar conexión al inicializar (solo en desarrollo)
-    if (process.env.NODE_ENV !== 'production') {
-      this.validateConnection().catch((error) => {
-        this.logger.warn(
-          `No se pudo validar la conexión SMTP al inicializar: ${error.message}`
-        );
-      });
-    }
+    // No validar conexión al arranque para no llenar logs de ERROR si SMTP falla (ej. contraseña de aplicación).
+    // El envío fallará al intentar enviar y el error se verá entonces.
   }
 
   private getRequiredEnv(key: string): string {
