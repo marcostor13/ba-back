@@ -53,6 +53,9 @@ export class MailService {
     const pass = this.getRequiredEnv('SMTP_PASS');
     this.defaultFrom = this.configService.get<string>('SMTP_FROM') || `BA <${user}>`;
 
+    // Log de configuración (sin mostrar contraseña completa)
+    this.logger.log(`SMTP Config - Host: ${host}, Port: ${port}, Secure: ${secure}, User: ${user}, Pass: ${pass ? `${pass.substring(0, 3)}...` : 'NOT SET'}`);
+
     // Detectar si es Gmail
     this.isGmail = host.includes('gmail.com') || host.includes('google');
 
@@ -92,9 +95,16 @@ export class MailService {
   private getRequiredEnv(key: string): string {
     const value = this.configService.get<string>(key);
     if (!value) {
+      this.logger.error(`Missing environment variable: ${key}`);
       throw new Error(`Missing environment variable: ${key}`);
     }
-    return value.trim();
+    // Limpiar el valor: eliminar espacios, saltos de línea y caracteres de control
+    const cleaned = value.trim().replace(/\s+$/g, '').replace(/[\r\n]/g, '');
+    if (!cleaned) {
+      this.logger.error(`Environment variable ${key} is empty after cleaning`);
+      throw new Error(`Environment variable ${key} is empty`);
+    }
+    return cleaned;
   }
 
   /**
@@ -163,6 +173,14 @@ export class MailService {
       text: options.text,
       attachments: options.attachments,
     };
+
+    // Log de los parámetros del correo antes de enviarlo (sin contenido sensible completo)
+    this.logger.log(
+      `Preparando envío de email - From: ${mailOptions.from}, To: ${mailOptions.to}, Subject: ${mailOptions.subject}, ` +
+        `HasHTML: ${Boolean(mailOptions.html)}, HasText: ${Boolean(mailOptions.text)}, Attachments: ${
+          mailOptions.attachments?.length ?? 0
+        }`,
+    );
 
     try {
       await this.transporter.sendMail(mailOptions);

@@ -21,6 +21,8 @@ import { LogModule } from './modules/log/log.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      envFilePath: '.env',
+      expandVariables: true,
     }),
     MongooseModule.forRoot(process.env.MONGO_URI || ''),
     AuthModule,
