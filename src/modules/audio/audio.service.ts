@@ -2,9 +2,6 @@ import { Injectable, Logger } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import OpenAI from 'openai'
 import { toFile } from 'openai/uploads'
-import { ChatOpenAI } from '@langchain/openai'
-import { loadSummarizationChain } from 'langchain/chains'
-import { Document } from 'langchain/document'
 import * as ffmpeg from 'fluent-ffmpeg'
 import ffmpegPath from 'ffmpeg-static'
 import { Readable } from 'stream'
@@ -17,7 +14,6 @@ import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3'
 export class AudioService {
   private readonly logger = new Logger(AudioService.name)
   private readonly openai: OpenAI
-  private readonly chatModel: ChatOpenAI
   private readonly s3Client: S3Client
   private ffmpegAvailable = false
   private readonly summaryMinRatio: number
@@ -26,13 +22,6 @@ export class AudioService {
     // Inicializar cliente de OpenAI para transcripción
     this.openai = new OpenAI({
       apiKey: this.configService.get<string>('OPENAI_API_KEY'),
-    })
-
-    // Inicializar modelo de chat para resumen
-    this.chatModel = new ChatOpenAI({
-      openAIApiKey: this.configService.get<string>('OPENAI_API_KEY'),
-      modelName: 'gpt-5.1',
-      temperature: 0.3, // Temperatura baja para resúmenes más consistentes
     })
 
     // Configurar ruta de ffmpeg si está disponible (ffmpeg-static, require dinámico o env var)
@@ -564,125 +553,85 @@ export class AudioService {
 
   private async generateSummary(text: string): Promise<string> {
     try {
-      // Determinar el tipo de cadena basado en la longitud del texto
       const textLength = text.length
-      const chainType = textLength > 4000 ? 'map_reduce' : 'stuff'
+      this.logger.log(`Mejorando y estructurando transcripción (${textLength} caracteres)`)
 
-      this.logger.log(`Generando resumen con cadena tipo: ${chainType}`)
+      // No resumir: mejorar la transcripción (claridad, gramática, estructura) preservando todo el contenido
+      const improved = await this.improveAndStructureTranscription(text)
 
-      // Crear documento de LangChain
-      const document = new Document({
-        pageContent: text,
-        metadata: { source: 'audio_transcription' },
-      })
-
-      // Cargar cadena de resumen
-      const summarizationChain = loadSummarizationChain(this.chatModel, {
-        type: chainType,
-      })
-
-      // Ejecutar la cadena de resumen base
-      const result = await summarizationChain.call({ input_documents: [document] })
-      const baseSummary: string = result.text || ''
-
-      // Estructurar para contexto de estimación técnica
-      const structured = await this.structureTechnicalSummary({
-        sourceText: text,
-        draft: baseSummary,
-      })
-
-      // Reglas solicitadas: mismo idioma que la transcripción y longitud mínima del 50%
-      const minChars = Math.floor(textLength * this.summaryMinRatio)
-      const finalSummary = await this.enforceSummaryConstraints({
-        draft: structured,
+      // Asegurar salida no vacía y sin pérdida drástica de contenido
+      const minChars = Math.floor(textLength * Math.min(this.summaryMinRatio, 0.5))
+      const finalText = await this.enforceSummaryConstraints({
+        draft: improved,
         sourceText: text,
         minChars,
       })
 
-      return finalSummary || 'No se pudo generar un resumen del contenido.'
+      return finalText || 'No se pudo mejorar el contenido transcrito.'
     } catch (error) {
-      this.logger.error(`Error en generación de resumen: ${error.message}`)
-      throw new Error(`Error al generar el resumen: ${error.message}`)
+      this.logger.error(`Error en generación: ${error.message}`)
+      throw new Error(`Error al procesar el audio: ${error.message}`)
     }
   }
 
   /**
-   * Reestructura el resumen pensando en estimaciones de obras/servicios técnicos.
-   * Siempre devuelve la salida en inglés, sin inventar datos y sin omitir detalles relevantes.
+   * Mejora la transcripción del audio sin resumirla: corrige redacción y la organiza
+   * en secciones clasificadas y en formato de lista para levantamiento de información.
    */
-  private async structureTechnicalSummary(params: {
-    sourceText: string
-    draft: string
-  }): Promise<string> {
-    const { sourceText, draft } = params
-    const sample = sourceText.slice(0, 2000)
+  private async improveAndStructureTranscription(transcription: string): Promise<string> {
+    if (!transcription?.trim()) {
+      return ''
+    }
+
+    const maxInputChars = 12000
+    const sourceText =
+      transcription.length > maxInputChars
+        ? transcription.slice(0, maxInputChars) + '\n\n[... texto recortado por longitud ...]'
+        : transcription
 
     try {
       const completion = await this.openai.chat.completions.create({
-        model: 'gpt-4o',
+        model: 'gpt-5.1',
         temperature: 0.2,
-        max_tokens: 2200,
+        max_completion_tokens: 4000,
         messages: [
           {
             role: 'system',
-            content:
-              [
-                'You are a senior pre-sales and technical estimation assistant for construction and remodeling.',
-                'Your job is to restructure information from a transcript so it is useful for technical estimation.',
-                'Do NOT invent facts or measurements.',
-                'Always produce the output IN ENGLISH only, translating faithfully from the source language when needed.',
-                'Do not omit relevant technical details that appear in the source text.',
-                'Never output placeholder sentences like "No content provided" or similar.',
-                'If there is no information for a section, simply omit that section.',
-              ].join('\n'),
+            content: [
+              'Eres un asistente experto en levantamiento de información para proyectos de construcción y remodelación (cocinas, baños, etc.).',
+              'Tu tarea es MEJORAR el texto transcrito de un audio: no resumir ni acortar. Preserva toda la información que el cliente comunica.',
+              'OBLIGATORIO:',
+              '1) CLASSIFY the information into logical sections. Section titles must be in English. Examples: SPACE DIMENSIONS, APPLIANCES AND EQUIPMENT, FURNITURE / CABINETRY, MATERIALS AND FINISHES, ROOM FEATURES, ADDITIONAL NOTES. Use only those that apply.',
+              '2) Presentar SIEMPRE el contenido en formato de LISTA bajo cada sección. Cada dato o idea debe ser un ítem de lista con "- " al inicio.',
+              '3) Títulos de sección en MAYÚSCULAS, sin símbolos (#). Una línea en blanco entre secciones.',
+              '4) Responder SIEMPRE en inglés. Si la transcripción está en otro idioma, traduce el contenido al inglés preservando datos y medidas. No inventes datos ni medidas.',
+              '5) Texto plano únicamente (sin Markdown, tablas, JSON ni HTML).',
+            ].join('\n'),
           },
           {
             role: 'user',
             content: [
-              'Restructure the following information for a technical estimator. Rules:',
-              '- Do not invent facts. Do not extrapolate unknown measurements.',
-              '- Language: Output MUST be ENGLISH only, translating faithfully from the source text when required.',
-              '- Do not omit any relevant piece of information present in the source text, even if it is brief.',
-              '- Clarity and order: use sections and lists when helpful for readability.',
-              '- Include all relevant information; if something is ambiguous, flag it as pending clarification.',
-              '- IMPORTANT: Never write sentences such as "No content provided" or similar placeholders.',
-              '- If there is no information for a section, simply omit that section.',
+              'Organize the following audio transcription for information gathering.',
               '',
-              'Output format (important):',
-              '- SECTION TITLES IN UPPERCASE, without any \"#\" prefix.',
-              '- Leave one blank line between sections.',
-              '- Use lists with \"- \" for items, and numbering like \"1)\", \"2)\" when appropriate.',
-              '- Preserve line breaks and indentation to enhance readability.',
-              '- Do not use advanced Markdown, tables, JSON, or HTML. Plain structured text only.',
-              '- Do not wrap the output in quotes or add extra commentary.',
+              'Requirements:',
+              '- Include ALL information from the text; do not summarize or omit data.',
+              '- CLASSIFY the content into sections (e.g. dimensions, equipment, materials, features). Use section titles in English.',
+              '- Write each piece of data or observation as a list item ("- "). No loose paragraphs; everything in lists under its section.',
+              '- Improve wording and clarity if needed, without changing the meaning.',
+              '- Output MUST be entirely in English (translate from the source language if necessary).',
+              '- Respond only with the organized text, no introduction or extra comments.',
               '',
-              'Suggested sections (use only those that apply):',
-              '1) Scope and objectives',
-              '2) Locations/areas',
-              '3) Technical specifications (materials, brands, qualities)',
-              '4) Measurements and quantities (if mentioned)',
-              '5) Tasks and work sequence',
-              '6) Constraints/considerations (access, schedules, regulations)',
-              '7) Risks and assumptions',
-              '8) Deliverables and acceptance criteria',
-              '9) Observations and pending items',
-              '',
-              'Source text (sample for context):',
-              '<<<\n' + sample + '\n>>>',
-              '',
-              'Base summary:',
-              '<<<\n' + (draft || '(empty)') + '\n>>>',
-              '',
-              'Respond only with the restructured version, following the requested format.',
+              'Texto transcrito:',
+              '<<<\n' + sourceText + '\n>>>',
             ].join('\n'),
           },
         ],
       })
 
-      return completion.choices?.[0]?.message?.content?.trim() || draft
+      return completion.choices?.[0]?.message?.content?.trim() || transcription
     } catch (e: any) {
-      this.logger.warn(`[Estructuración] Falló reestructuración: ${e?.message || e}`)
-      return draft
+      this.logger.warn(`[Mejora de transcripción] Error: ${e?.message || e}`)
+      return transcription
     }
   }
 
@@ -724,7 +673,7 @@ export class AudioService {
         const completion = await this.openai.chat.completions.create({
           model: 'gpt-4o',
           temperature: 0.3,
-          max_tokens: estimatedTokens,
+          max_completion_tokens: estimatedTokens,
           messages: [
             {
               role: 'system',
