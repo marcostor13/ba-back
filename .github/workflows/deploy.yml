@@ -77,7 +77,7 @@ jobs:
             docker pull ghcr.io/${{ env.IMAGE_NAME }}:latest
             
             # Reiniciar contenedor
-            docker-compose up -d --build
+            docker compose up -d --build
             
             # Limpiar imágenes viejas que ya no se usan para liberar espacio
             docker image prune -f
