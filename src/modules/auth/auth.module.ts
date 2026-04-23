@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { UsersModule } from '../users/users.module';
 import { PassportModule } from '@nestjs/passport';
@@ -21,7 +21,7 @@ import { CustomerModule } from '../customer/customer.module';
     }),
     RoleModule,
     MailModule,
-    CustomerModule,
+    forwardRef(() => CustomerModule),
   ],
   providers: [AuthService, LocalStrategy, JwtStrategy],
   controllers: [AuthController],

@@ -51,6 +51,18 @@ export class CustomerService {
       userId: user._id,
     };
 
+    // Ensure addresses array is populated if root address is provided
+    if (createCustomerDto.address && (!createCustomerDto.addresses || createCustomerDto.addresses.length === 0)) {
+      customerData.addresses = [{
+        label: 'Primary',
+        address: createCustomerDto.address,
+        city: createCustomerDto.city || '',
+        state: createCustomerDto.state || '',
+        zipCode: createCustomerDto.zipCode || '',
+        isPrimary: true
+      }];
+    }
+
     if (createCustomerDto.companyId) {
       customerData.companyId = new Types.ObjectId(createCustomerDto.companyId);
     }
@@ -134,11 +146,48 @@ export class CustomerService {
     return this.customerModel.deleteMany({ userId: new Types.ObjectId(userId) }).exec();
   }
 
-  update(id: string, updateCustomerDto: UpdateCustomerDto) {
+  async update(id: string, updateCustomerDto: UpdateCustomerDto) {
     const updateData: Record<string, unknown> = { ...updateCustomerDto };
+    
     if (updateCustomerDto.companyId) {
       updateData.companyId = new Types.ObjectId(updateCustomerDto.companyId);
     }
+
+    // Sync logic: if addresses provided, sync primary to root fields
+    if (updateCustomerDto.addresses && updateCustomerDto.addresses.length > 0) {
+      const primary = updateCustomerDto.addresses.find(a => a.isPrimary) || updateCustomerDto.addresses[0];
+      if (primary) {
+        updateData.address = primary.address;
+        updateData.city = primary.city;
+        updateData.state = primary.state;
+        updateData.zipCode = primary.zipCode;
+      }
+    } 
+    // If root fields updated but not addresses, update/create primary address
+    else if (updateCustomerDto.address || updateCustomerDto.city || updateCustomerDto.state || updateCustomerDto.zipCode) {
+      const currentCustomer = await this.customerModel.findById(id).lean();
+      if (currentCustomer) {
+        let addresses = currentCustomer.addresses || [];
+        const primaryIndex = addresses.findIndex(a => a.isPrimary);
+        
+        const newAddress = {
+          label: 'Primary',
+          address: updateCustomerDto.address ?? currentCustomer.address ?? '',
+          city: updateCustomerDto.city ?? currentCustomer.city ?? '',
+          state: updateCustomerDto.state ?? currentCustomer.state ?? '',
+          zipCode: updateCustomerDto.zipCode ?? currentCustomer.zipCode ?? '',
+          isPrimary: true
+        };
+
+        if (primaryIndex >= 0) {
+          addresses[primaryIndex] = { ...addresses[primaryIndex], ...newAddress };
+        } else {
+          addresses.push(newAddress);
+        }
+        updateData.addresses = addresses;
+      }
+    }
+
     return this.customerModel.findByIdAndUpdate(id, updateData, { new: true }).exec();
   }
 

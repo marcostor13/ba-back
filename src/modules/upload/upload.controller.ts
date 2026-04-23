@@ -1,6 +1,8 @@
 import {
   Controller,
   Post,
+  Get,
+  Query,
   UploadedFile,
   UseInterceptors,
   ParseFilePipe,
@@ -11,7 +13,11 @@ import {
   FileTypeValidator,
   Body,
   ValidationPipe,
+  UseGuards,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
+import { AuthGuard } from '@nestjs/passport';
 import { UploadService } from './upload.service';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { GeneratePresignedUrlDto } from './dto/generate-presigned-url.dto';
@@ -19,6 +25,7 @@ import { GeneratePresignedUrlDto } from './dto/generate-presigned-url.dto';
 const validationPipe = new ValidationPipe({ transform: true, whitelist: true });
 
 @Controller('upload')
+@UseGuards(AuthGuard('jwt'))
 export class UploadController {
   constructor(private readonly uploadService: UploadService) { }
 
@@ -57,5 +64,31 @@ export class UploadController {
       dto.fileName,
       dto.contentType,
     );
+  }
+
+  /**
+   * Proxy de imagen: descarga desde S3 y devuelve los bytes al browser.
+   * Resuelve el problema de CORS cuando jsPDF intenta cargar imágenes S3.
+   * GET /upload/image-proxy?url=https://bucket.s3...
+   */
+  @Get('image-proxy')
+  async imageProxy(
+    @Query('url') url: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    if (!url) {
+      res.status(400).json({ message: 'url query param is required' });
+      return;
+    }
+
+    try {
+      const { buffer, contentType } = await this.uploadService.getFileBuffer(url);
+      res.set('Content-Type', contentType);
+      res.set('Cache-Control', 'private, max-age=3600');
+      res.set('Access-Control-Allow-Origin', '*');
+      res.end(buffer);
+    } catch {
+      res.status(404).json({ message: 'File not found or could not be fetched' });
+    }
   }
 }

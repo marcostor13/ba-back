@@ -16,6 +16,10 @@ import { PaymentModule } from './modules/payment/payment.module';
 import { InvoiceModule } from './modules/invoice/invoice.module';
 import { KpiModule } from './modules/kpi/kpi.module';
 import { LogModule } from './modules/log/log.module';
+import { CommentModule } from './modules/comment/comment.module';
+import { AppointmentModule } from './modules/appointment/appointment.module';
+import { SmsModule } from './modules/sms/sms.module';
+import { NotificationModule } from './modules/notification/notification.module';
 
 @Module({
   imports: [
@@ -38,6 +42,10 @@ import { LogModule } from './modules/log/log.module';
     AudioModule,
     UploadModule,
     LogModule,
+    CommentModule,
+    SmsModule,
+    AppointmentModule,
+    NotificationModule,
   ],
   controllers: [AppController],
   providers: [AppService],

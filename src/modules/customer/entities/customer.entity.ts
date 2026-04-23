@@ -15,6 +15,14 @@ export interface CustomerDocument {
   description: string;
   companyId?: MongooseSchema.Types.ObjectId;
   userId?: MongooseSchema.Types.ObjectId;
+  addresses?: {
+    label?: string;
+    address: string;
+    city: string;
+    state: string;
+    zipCode: string;
+    isPrimary: boolean;
+  }[];
 }
 
 export interface GetCustomerDocument extends CustomerDocument {
@@ -61,6 +69,28 @@ export class Customer {
 
   @Prop({ type: MongooseSchema.Types.ObjectId, required: false, ref: 'User' })
   userId?: MongooseSchema.Types.ObjectId;
+
+  @Prop({
+    type: [
+      {
+        label: { type: String, required: false },
+        address: { type: String, required: true },
+        city: { type: String, required: true },
+        state: { type: String, required: true },
+        zipCode: { type: String, required: true },
+        isPrimary: { type: Boolean, default: false },
+      },
+    ],
+    default: [],
+  })
+  addresses: {
+    label?: string;
+    address: string;
+    city: string;
+    state: string;
+    zipCode: string;
+    isPrimary: boolean;
+  }[];
 }
 
 export const CustomerSchema = SchemaFactory.createForClass(Customer);

@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  api:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-marcostor13}/ba-back:latest
+    container_name: ba-back-api
+    restart: always
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    # Si dependes de una base de datos local en el VPS, puedes agregarla aquí o en 'networks'
+    # networks:
+    #   - mi-red
+
+# networks:
+#   mi-red:
+#     external: true

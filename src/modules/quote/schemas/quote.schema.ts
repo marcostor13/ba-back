@@ -114,6 +114,12 @@ export class Quote {
     file?: string;
     items?: Array<{ quantity: number; description: string }>;
   };
+
+  @Prop({ type: String, required: false })
+  pdfUrl?: string;
+
+  @Prop({ type: Boolean, default: false })
+  isChangeOrder: boolean;
 }
 
 export const QuoteSchema = SchemaFactory.createForClass(Quote);

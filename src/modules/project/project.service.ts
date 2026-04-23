@@ -2,14 +2,28 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Project, ProjectDocument, ProjectStatus } from './schemas/project.schema';
+import { Quote, QuoteDocument } from '../quote/schemas/quote.schema';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
 import { StatusHistoryService } from '../status-history/status-history.service';
+
+export interface TimelineItem {
+  type: 'status' | 'update' | 'milestone';
+  date: string;
+  label: string;
+  description?: string;
+  entityType?: 'quote' | 'project';
+  entityId?: string;
+  userId?: string;
+  fromStatus?: string;
+  toStatus?: string;
+}
 
 @Injectable()
 export class ProjectService {
   constructor(
     @InjectModel(Project.name) private readonly projectModel: Model<ProjectDocument>,
+    @InjectModel(Quote.name) private readonly quoteModel: Model<QuoteDocument>,
     private readonly statusHistoryService: StatusHistoryService,
   ) {}
 
@@ -176,6 +190,81 @@ export class ProjectService {
       throw new NotFoundException(`Project with ID ${id} not found`);
     }
     return deleted as Project;
+  }
+
+  async getTimeline(projectId: string): Promise<TimelineItem[]> {
+    if (!Types.ObjectId.isValid(projectId)) {
+      throw new BadRequestException('Invalid projectId format');
+    }
+
+    const project = await this.projectModel.findById(projectId).lean().exec();
+    if (!project) {
+      throw new NotFoundException(`Project with ID ${projectId} not found`);
+    }
+
+    const quoteIds = await this.quoteModel
+      .find({ projectId: new Types.ObjectId(projectId) })
+      .select('_id')
+      .lean()
+      .exec();
+    const entityIds = [
+      projectId,
+      ...quoteIds.map((q) => q._id.toString()),
+    ];
+
+    const [statusHistory, projectDoc] = await Promise.all([
+      this.statusHistoryService.findByEntityIds(entityIds),
+      this.projectModel.findById(projectId).lean().exec(),
+    ]);
+
+    const items: TimelineItem[] = [];
+
+    for (const h of statusHistory) {
+      const doc = h as { entityId: Types.ObjectId; entityType: string; fromStatus?: string; toStatus: string; userId?: Types.ObjectId; createdAt: Date };
+      items.push({
+        type: 'status',
+        date: doc.createdAt.toISOString(),
+        label: doc.fromStatus
+          ? `${doc.entityType}: ${doc.fromStatus} → ${doc.toStatus}`
+          : `${doc.entityType}: ${doc.toStatus}`,
+        entityType: doc.entityType as 'quote' | 'project',
+        entityId: doc.entityId.toString(),
+        userId: doc.userId?.toString(),
+        fromStatus: doc.fromStatus,
+        toStatus: doc.toStatus,
+      });
+    }
+
+    if (projectDoc?.updates?.length) {
+      for (const u of projectDoc.updates) {
+        const upd = u as unknown as { title: string; description: string; date: Date; userId?: { toString(): string } };
+        items.push({
+          type: 'update',
+          date: upd.date instanceof Date ? upd.date.toISOString() : String(upd.date),
+          label: upd.title,
+          description: upd.description,
+          userId: upd.userId?.toString(),
+        });
+      }
+    }
+
+    if (projectDoc?.milestones?.length) {
+      for (const m of projectDoc.milestones) {
+        const mile = m as { name: string; description?: string; dueDate?: Date; completed?: boolean; completedDate?: Date };
+        const date = mile.completedDate || mile.dueDate;
+        if (date) {
+          items.push({
+            type: 'milestone',
+            date: date instanceof Date ? date.toISOString() : String(date),
+            label: mile.name,
+            description: mile.description,
+          });
+        }
+      }
+    }
+
+    items.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    return items;
   }
 }
 

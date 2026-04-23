@@ -1,5 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { DeleteObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { ConfigService } from '@nestjs/config';
 
@@ -58,9 +63,10 @@ export class UploadService {
     return `https://${bucket}.s3.${region}.amazonaws.com/${encodedKey}`;
   }
 
-  async uploadImageBuffer(
+  async uploadFileBuffer(
     file: Buffer,
-    key: string
+    key: string,
+    contentType: string = 'application/octet-stream'
   ) {
 
     const bucketName = this.getBucketName();
@@ -69,7 +75,7 @@ export class UploadService {
       Bucket: bucketName,
       Key: key,
       Body: file,
-      ContentType: 'image/png'
+      ContentType: contentType
     });
 
     try {
@@ -78,6 +84,13 @@ export class UploadService {
     } catch (error) {
       throw new Error(`Error al subir el archivo a S3: ${error.message}`);
     }
+  }
+
+  async uploadImageBuffer(
+    file: Buffer,
+    key: string
+  ) {
+    return this.uploadFileBuffer(file, key, 'image/png');
   }
 
 
@@ -159,5 +172,90 @@ export class UploadService {
     } catch (error) {
       throw new Error(`Error al generar la URL presignada: ${error.message}`);
     }
+  }
+
+  /**
+   * Parsea una URL de S3 y extrae bucket y key.
+   */
+  parseS3Url(url: string): { bucket: string; key: string } | null {
+    try {
+      const urlObj = new URL(url);
+      let bucket: string;
+      let key: string;
+
+      if (urlObj.hostname.includes('.s3.') || urlObj.hostname.includes('s3.amazonaws.com')) {
+        if (urlObj.hostname.startsWith('s3.')) {
+          const pathParts = urlObj.pathname.split('/').filter((p) => p);
+          bucket = pathParts[0];
+          key = decodeURIComponent(pathParts.slice(1).join('/'));
+        } else {
+          bucket = urlObj.hostname.split('.')[0];
+          key = decodeURIComponent(urlObj.pathname.replace(/^\//, ''));
+        }
+        return { bucket, key };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Genera una URL presignada para descargar/visualizar un archivo en S3.
+   * Soluciona "Access Denied" cuando el bucket no tiene acceso público.
+   * @param s3Url URL pública del archivo en S3
+   * @param expiresIn Segundos de validez (default: 7 días)
+   */
+  async getPresignedDownloadUrl(
+    s3Url: string,
+    expiresIn: number = 7 * 24 * 60 * 60,
+  ): Promise<string> {
+    const parsed = this.parseS3Url(s3Url);
+    if (!parsed) {
+      return s3Url; // Si no es URL de S3, devolver original
+    }
+
+    const command = new GetObjectCommand({
+      Bucket: parsed.bucket,
+      Key: parsed.key,
+    });
+
+    try {
+      return await getSignedUrl(this.s3Client, command, {
+        expiresIn,
+      });
+    } catch (error) {
+      throw new Error(`Error al generar URL presignada de descarga: ${error}`);
+    }
+  }
+
+  /**
+   * Descarga un archivo desde S3 y devuelve el buffer.
+   * @param s3Url URL del archivo en S3
+   */
+  async getFileBuffer(s3Url: string): Promise<{ buffer: Buffer; contentType: string }> {
+    const parsed = this.parseS3Url(s3Url);
+    if (!parsed) {
+      throw new Error(`URL de S3 no válida: ${s3Url}`);
+    }
+
+    const command = new GetObjectCommand({
+      Bucket: parsed.bucket,
+      Key: parsed.key,
+    });
+
+    const response = await this.s3Client.send(command);
+    if (!response.Body) {
+      throw new Error('No se pudo obtener el cuerpo del archivo desde S3');
+    }
+
+    const chunks: Uint8Array[] = [];
+    for await (const chunk of response.Body as AsyncIterable<Uint8Array>) {
+      chunks.push(chunk);
+    }
+    const buffer = Buffer.concat(chunks);
+    const contentType = response.ContentType || 'application/octet-stream';
+
+    return { buffer, contentType };
   }
 }

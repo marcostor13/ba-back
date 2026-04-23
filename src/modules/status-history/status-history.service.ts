@@ -29,6 +29,26 @@ export class StatusHistoryService {
     return history.save();
   }
 
+  async findByEntityIds(
+    entityIds: (string | Types.ObjectId)[],
+    entityType?: 'quote' | 'project',
+  ) {
+    const objectIds = entityIds
+      .filter((id) => id && Types.ObjectId.isValid(id.toString()))
+      .map((id) => new Types.ObjectId(id.toString()));
+
+    if (objectIds.length === 0) return [];
+
+    const match: Record<string, unknown> = { entityId: { $in: objectIds } };
+    if (entityType) match.entityType = entityType;
+
+    return this.statusHistoryModel
+      .find(match)
+      .sort({ createdAt: 1 })
+      .lean()
+      .exec();
+  }
+
   async getAverageTimePerStage(companyId: string, entityType: 'quote' | 'project', startDate?: Date, endDate?: Date) {
     const match: any = {
       companyId: new Types.ObjectId(companyId),

@@ -11,8 +11,12 @@ import { Project } from '../project/schemas/project.schema';
 import { Customer } from '../customer/entities/customer.entity';
 import { Company } from '../company/schemas/company.schema';
 import { MailService } from '../mail/mail.service';
+import { NotificationService } from '../notification/notification.service';
+import { NotificationType } from '../notification/schemas/notification.schema';
 import { StatusHistoryService } from '../status-history/status-history.service';
+import { UploadService } from '../upload/upload.service';
 import * as PDFDocument from 'pdfkit';
+import * as sharp from 'sharp';
 
 @Injectable()
 export class QuoteService {
@@ -25,6 +29,8 @@ export class QuoteService {
     @InjectModel(Company.name) private readonly companyModel: Model<Company>,
     private readonly mailService: MailService,
     private readonly statusHistoryService: StatusHistoryService,
+    private readonly uploadService: UploadService,
+    private readonly notificationService: NotificationService,
   ) { }
 
   async create(dto: CreateQuoteRequestDto): Promise<Quote> {
@@ -64,24 +70,88 @@ export class QuoteService {
     if (dto.notes) quoteData.notes = dto.notes;
     if (dto.materials !== undefined) quoteData.materials = dto.materials;
 
-    const created = await this.quoteModel.create(quoteData);
-    const quote = created.toObject() as Quote;
+    // Check if this is a Change Order (i.e., there is already an approved version for this project/category)
+    if (dto.versionNumber > 1) {
+      const hasApprovedVersion = await this.quoteModel.exists({
+        projectId: new Types.ObjectId(dto.projectId),
+        category: dto.category,
+        status: { $in: [QuoteStatus.APPROVED, QuoteStatus.IN_PROGRESS, QuoteStatus.COMPLETED] }
+      });
+      
+      if (hasApprovedVersion) {
+        quoteData.isChangeOrder = true;
+      }
+    }
 
+    const created = await this.quoteModel.create(quoteData);
+    
     // Record initial status
     await this.statusHistoryService.recordTransition({
       entityId: created._id.toString(),
       entityType: 'quote',
-      toStatus: quote.status,
+      toStatus: created.status,
       userId: dto.userId,
       companyId: dto.companyId,
     });
 
-    // Enviar email con PDF adjunto de forma asíncrona (no bloquear la respuesta)
+    // Fetch dependencies for PDF/Email
+    const [customer, company] = await Promise.all([
+      this.customerModel.findById(dto.customerId).lean().exec(),
+      this.companyModel.findById(dto.companyId).lean().exec(),
+    ]);
+
+    // If created as SENT (or APPROVED), generate and store PDF immediately
+    if (created.status === QuoteStatus.SENT || created.status === QuoteStatus.APPROVED) {
+      if (project && customer && company) {
+        await this.ensurePdfUrl(created, project as unknown as Project, customer as unknown as Customer, company as unknown as Company);
+      }
+    }
+
+    const quote = created.toObject() as Quote;
+
+    // Enviar email con PDF adjunto de forma asíncrona
+    // Nota: sendQuoteCreatedEmail buscará customer/company de nuevo si no se los pasamos, 
+    // pero como es privado y existente, dejémoslo como está o refactorizémoslo si es necesario.
+    // Por ahora, para minimizar cambios, dejamos que sendQuoteCreatedEmail haga sus fetch internamente 
+    // o podríamos pasárselos si modificamos la firma.
+    // Para simplificar, dejaremos que sendQuoteCreatedEmail funcione como antes (hará fetch extra), 
+    // pero optimizaremos en el futuro.
     void this.sendQuoteCreatedEmail(quote, created._id.toString(), project).catch((error) => {
       this.logger.error(`Error al enviar el email de quote creada: ${error.message}`, error.stack);
     });
 
     return quote;
+  }
+
+  private async ensurePdfUrl(
+    quoteDoc: any,
+    project: Project,
+    customer: Customer,
+    company: Company
+  ): Promise<string | null> {
+    try {
+      const pdfBuffer = await this.generateQuotePdfBuffer({
+        quote: quoteDoc.toObject ? quoteDoc.toObject() : quoteDoc,
+        quoteId: quoteDoc._id.toString(),
+        project,
+        customer,
+        company,
+      });
+
+      const fileName = `quotes/${(project as any)._id}/quote-${quoteDoc.versionNumber}-${quoteDoc._id}.pdf`;
+      const pdfUrl = await this.uploadService.uploadFileBuffer(pdfBuffer, fileName, 'application/pdf');
+      
+      if (typeof quoteDoc.save === 'function') {
+        quoteDoc.pdfUrl = pdfUrl;
+        await quoteDoc.save();
+      }
+      
+      this.logger.log(`PDF generated and uploaded for quote ${quoteDoc._id}: ${pdfUrl}`);
+      return pdfUrl;
+    } catch (error) {
+      this.logger.error(`Failed to generate/upload PDF for quote ${quoteDoc._id}: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
   }
 
   private async sendQuoteCreatedEmail(
@@ -94,7 +164,7 @@ export class QuoteService {
       this.companyModel.findById(quote.companyId).lean().exec(),
     ]);
 
-    const html = this.buildQuoteEmailHtml({ quote, quoteId, project, customer, company });
+    const html = await this.buildQuoteEmailHtml({ quote, quoteId, project, customer, company });
     const pdfBuffer = await this.generateQuotePdfBuffer({
       quote,
       quoteId,
@@ -117,19 +187,91 @@ export class QuoteService {
     });
   }
 
-  private buildQuoteEmailHtml(params: {
+  /**
+   * Convierte un string a formato Capitalize (primera letra de cada palabra en mayúscula).
+   * "none" -> "None", "in_progress" -> "In Progress"
+   */
+  private toTitleCase(str: string): string {
+    if (!str || typeof str !== 'string') return str;
+    return str
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (c) => c.toUpperCase())
+      .trim();
+  }
+
+  /**
+   * Formatea un valor para mostrar en email/PDF. Evita [object Object] para objetos y arrays.
+   */
+  private formatValueForDisplay(value: unknown): string {
+    if (value === undefined || value === null) return '';
+    if (typeof value === 'string') return this.toTitleCase(value);
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    if (Array.isArray(value)) {
+      const parts = value.map((item) => {
+        if (item && typeof item === 'object' && !Array.isArray(item)) {
+          const text =
+            (item as Record<string, unknown>).text ??
+            (item as Record<string, unknown>).content ??
+            (item as Record<string, unknown>).summary ??
+            (item as Record<string, unknown>).description ??
+            (item as Record<string, unknown>).comment ??
+            (item as Record<string, unknown>).notes ??
+            (item as Record<string, unknown>).note ??
+            (item as Record<string, unknown>).message ??
+            (item as Record<string, unknown>).body;
+          return text ? this.formatValueForDisplay(text) : JSON.stringify(item, null, 2);
+        }
+        return this.formatValueForDisplay(item);
+      });
+      return parts.filter(Boolean).join('; ');
+    }
+    if (typeof value === 'object') {
+      const obj = value as Record<string, unknown>;
+      const text =
+        obj.text ??
+        obj.content ??
+        obj.summary ??
+        obj.description ??
+        obj.comment ??
+        obj.notes ??
+        obj.note ??
+        obj.message ??
+        obj.body;
+      if (text !== undefined) return this.formatValueForDisplay(text);
+      
+      // Fallback: try to format entries, but if empty or weird, JSON stringify
+      const entries = Object.entries(obj).filter(([, v]) => v !== undefined && v !== null && v !== '');
+      if (entries.length === 0) return JSON.stringify(obj);
+      
+      return entries
+        .map(([k, v]) => `${this.formatKeyForDisplay(k)}: ${this.formatValueForDisplay(v)}`)
+        .join(', ');
+    }
+    return String(value);
+  }
+
+  /**
+   * Convierte camelCase a "Camel Case" para etiquetas.
+   */
+  private formatKeyForDisplay(key: string): string {
+    return this.toTitleCase(key.replace(/([A-Z])/g, ' $1').trim());
+  }
+
+  private async buildQuoteEmailHtml(params: {
     quote: Quote;
     quoteId: string;
     project: Project;
     customer: Customer | null;
     company: Company | null;
-  }): string {
+  }): Promise<string> {
     const { quote, quoteId, project, customer, company } = params;
 
-    const customerName = customer ? `${customer.name} ${customer.lastName}`.trim() : 'N/A';
+    const customerName = this.toTitleCase(
+      customer ? `${customer.name || ''} ${customer.lastName || ''}`.trim() || 'N/A' : 'N/A',
+    );
     const customerEmail = customer?.email ?? 'N/A';
-    const projectName = project?.name ?? 'N/A';
-    const companyName = (company as any)?.name ?? 'N/A';
+    const projectName = this.toTitleCase(project?.name ?? 'N/A');
+    const companyName = this.toTitleCase((company as { name?: string })?.name ?? 'N/A');
 
     const infoSections: string[] = [];
 
@@ -151,30 +293,35 @@ export class QuoteService {
         ? quote.materials.items
           .map(
             (item) =>
-              `<li><span class="label">Qty</span> <span class="value">${item.quantity}</span> <span class="label">Item</span> <span class="value">${item.description}</span></li>`,
+              `<li><span class="label">Qty</span> <span class="value">${item.quantity}</span> <span class="label">Item</span> <span class="value">${this.escapeHtml(this.toTitleCase(item.description))}</span></li>`,
           )
           .join('')
-        : '<li><span class="value">No specific materials listed.</span></li>';
+        : '<li><span class="value">No Specific Materials Listed.</span></li>';
 
     const notes = quote.notes
-      ? `<p class="paragraph">${quote.notes}</p>`
-      : '<p class="paragraph">No additional notes.</p>';
+      ? `<p class="paragraph">${this.escapeHtml(this.toTitleCase(quote.notes))}</p>`
+      : '<p class="paragraph">No Additional Notes.</p>';
 
-    // --- LOGIC FOR FILES SECTION (EMAIL) ---
+    // --- LOGIC FOR FILES SECTION (EMAIL) - Usar URLs presignadas para evitar Access Denied ---
     const allFiles: { label: string; url: string }[] = [];
 
     if (quote.countertopsFiles?.length) {
-      quote.countertopsFiles.forEach((url, index) => {
-        allFiles.push({ label: `Countertop File ${index + 1}`, url });
-      });
+      for (let i = 0; i < quote.countertopsFiles.length; i++) {
+        const url = quote.countertopsFiles[i];
+        const presignedUrl = await this.uploadService.getPresignedDownloadUrl(url);
+        allFiles.push({ label: `Countertop File ${i + 1}`, url: presignedUrl });
+      }
     }
     if (quote.backsplashFiles?.length) {
-      quote.backsplashFiles.forEach((url, index) => {
-        allFiles.push({ label: `Backsplash File ${index + 1}`, url });
-      });
+      for (let i = 0; i < quote.backsplashFiles.length; i++) {
+        const url = quote.backsplashFiles[i];
+        const presignedUrl = await this.uploadService.getPresignedDownloadUrl(url);
+        allFiles.push({ label: `Backsplash File ${i + 1}`, url: presignedUrl });
+      }
     }
     if (quote.materials?.file) {
-      allFiles.push({ label: 'Materials File', url: quote.materials.file });
+      const presignedUrl = await this.uploadService.getPresignedDownloadUrl(quote.materials.file);
+      allFiles.push({ label: 'Materials File', url: presignedUrl });
     }
 
     const filesSection =
@@ -407,10 +554,6 @@ export class QuoteService {
 
             <div class="summary-grid">
               <div class="summary-item">
-                <span class="summary-label">Quote ID</span>
-                <span class="summary-value">${quoteId}</span>
-              </div>
-              <div class="summary-item">
                 <span class="summary-label">Total Price</span>
                 <span class="summary-value summary-value-total">$${quote.totalPrice.toFixed(2)}</span>
               </div>
@@ -424,11 +567,11 @@ export class QuoteService {
               </div>
               <div class="summary-item">
                 <span class="summary-label">Category</span>
-                <span class="summary-value">${quote.category}</span>
+                <span class="summary-value">${this.toTitleCase(quote.category)}</span>
               </div>
               <div class="summary-item">
                 <span class="summary-label">Status</span>
-                <span class="summary-value">${quote.status}</span>
+                <span class="summary-value">${this.toTitleCase(quote.status)}</span>
               </div>
             </div>
 
@@ -442,7 +585,7 @@ export class QuoteService {
 
             <div class="section">
               <h3 class="section-title">Experience / Scope</h3>
-              <p class="paragraph">${quote.experience || 'No experience description provided.'}</p>
+              <p class="paragraph">${this.escapeHtml(this.toTitleCase(quote.experience || 'No Experience Description Provided.'))}</p>
             </div>
 
             <div class="section">
@@ -479,18 +622,102 @@ export class QuoteService {
     }
 
     const items = entries
-      .map(
-        ([key, value]) =>
-          `<li><strong>${key}:</strong> ${String(value)}</li>`,
-      )
+      .map(([key, value]) => {
+        // 1. Check for object with mediaFiles (e.g. additionalComments)
+        if (
+          typeof value === 'object' &&
+          value !== null &&
+          'mediaFiles' in value &&
+          Array.isArray((value as any).mediaFiles)
+        ) {
+          const obj = value as any;
+          const text =
+            obj.text ??
+            obj.content ??
+            obj.comment ??
+            obj.notes ??
+            obj.note ??
+            obj.message ??
+            obj.body;
+
+          const filesHtml = (obj.mediaFiles as string[])
+            .map((url, i) => {
+              const isVideo = ['mp4', 'mov', 'avi', 'mkv', 'webm'].some((ext) =>
+                url.toLowerCase().includes(ext),
+              );
+              const label = isVideo ? 'Video' : 'Image';
+              return `<a href="${url}" target="_blank" style="color: #332F28; text-decoration: underline;">View ${label} ${i + 1}</a>`;
+            })
+            .join(', ');
+
+          let html = '';
+          if (text) {
+            html += `<li><span class="label">${this.formatKeyForDisplay(key)}</span><span class="value">${this.escapeHtml(this.formatValueForDisplay(text))}</span></li>`;
+          }
+          if (filesHtml) {
+            html += `<li><span class="label">${this.formatKeyForDisplay(key)} Files</span><span class="value">${filesHtml}</span></li>`;
+          }
+          return html;
+        }
+
+        // 2. Check for array of strings (files/URLs)
+        if (Array.isArray(value) && value.length && typeof value[0] === 'string') {
+           const filesHtml = (value as string[])
+            .map((url, i) => {
+              // Basic check if it looks like a URL
+              if (/^https?:\/\//i.test(url)) {
+                 return `<a href="${url}" target="_blank" style="color: #332F28; text-decoration: underline;">View File ${i + 1}</a>`;
+              }
+              return this.escapeHtml(url);
+            })
+            .join(', ');
+           return `<li><span class="label">${this.formatKeyForDisplay(key)}</span><span class="value">${filesHtml}</span></li>`;
+        }
+
+        // Default behavior
+        return `<li><span class="label">${this.formatKeyForDisplay(key)}</span><span class="value">${this.escapeHtml(this.formatValueForDisplay(value))}</span></li>`;
+      })
       .join('');
 
     return `
-      <h3>${title}</h3>
-      <ul>
+      <h3>${this.toTitleCase(title)}</h3>
+      <ul class="info-list">
         ${items}
       </ul>
     `;
+  }
+
+  private escapeHtml(str: string): string {
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  private isImageUrl(url: string): boolean {
+    const cleanUrl = url.split('?')[0];
+    const ext = cleanUrl.split('.').pop()?.toLowerCase() ?? '';
+    return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tiff', 'tif'].includes(ext);
+  }
+
+  /** Extrae un nombre de archivo amigable desde una URL de S3 (sin query string, timestamps ni UUID prefix). */
+  private friendlyFileName(url: string): string {
+    try {
+      const withoutQuery = url.split('?')[0];
+      const parts = withoutQuery.split('/');
+      const rawName = decodeURIComponent(parts.pop() ?? withoutQuery);
+      const clean = rawName
+        .replace(/^(\d+[-])+\d*[_-]?/, '')  // cadenas de dígitos-dígitos-..._
+        .replace(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[_-]?/i, '');
+      const nameNoExt = (clean || '').replace(/\.[^.]+$/, '');
+      if (!clean || nameNoExt.length < 3) {
+        return rawName.length > 30 ? '...' + rawName.slice(-27) : rawName;
+      }
+      return clean;
+    } catch {
+      return url;
+    }
   }
 
   private async generateQuotePdfBuffer(params: {
@@ -502,27 +729,130 @@ export class QuoteService {
   }): Promise<Buffer> {
     const { quote, quoteId, project, customer, company } = params;
 
-    const primaryGreen = '#3A7344';
-    const darkCharcoal = '#332F28';
-    const lightSand = '#EAD1BA';
+    // Paleta de marca BA (idéntica al frontend)
+    const primaryColor = '#3A7344';   // pine
+    const textColor = '#332F28';      // charcoal
+    const backgroundColor = '#FFFFFF';
+    const sandColor = '#EAD1BA';      // sand
+    const clayColor = '#997A63';      // clay
+    const fogColor = '#BFBFBF';       // fog
+    const slateColor = '#535353';     // slate
+    const rowAltColor = '#F5F0EA';    // fog/10 warm
 
-    const customerName = customer ? `${customer.name} ${customer.lastName}`.trim() : 'N/A';
+    const customerName = this.toTitleCase(
+      customer ? `${customer.name || ''} ${customer.lastName || ''}`.trim() || 'N/A' : 'N/A',
+    );
     const customerEmail = customer?.email ?? 'N/A';
-    const customerPhone = (customer as any)?.phone ?? 'N/A';
-    const experience = quote.experience || 'N/A';
-    const status = quote.status;
+    const customerPhone = (customer as { phone?: string })?.phone ?? 'N/A';
+    const experience = this.toTitleCase(quote.experience || 'N/A');
     const creationDate = (quote as any)?.createdAt
-      ? new Date((quote as any).createdAt).toLocaleDateString()
-      : new Date().toLocaleDateString();
+      ? new Date((quote as any).createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+      : new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
-    const categoryLabel = quote.category?.toUpperCase?.() ?? 'ESTIMATE';
+    // ── RECOLECTAR DATOS DE MEDIA ──
+    const kitchenInfo = (quote.kitchenInformation as Record<string, unknown>) || {};
 
-    const isInternalView = true; // Actualmente solo se envía a correos internos
+    // Countertops files
+    const countertopsFiles: string[] = (
+      (quote.countertopsFiles?.length ? quote.countertopsFiles : null) ??
+      (Array.isArray(kitchenInfo['countertopsFiles']) ? kitchenInfo['countertopsFiles'] as string[] : null) ??
+      []
+    );
+
+    // Backsplash files
+    const backsplashFiles: string[] = (
+      (quote.backsplashFiles?.length ? quote.backsplashFiles : null) ??
+      (Array.isArray(kitchenInfo['backsplashFiles']) ? kitchenInfo['backsplashFiles'] as string[] : null) ??
+      []
+    );
+
+    // Audio notes
+    const audioNotesRaw = kitchenInfo['audioNotes'] ?? (quote as any).audioNotes;
+    let audioNotes: Array<{ url: string; transcription?: string; summary?: string }> = [];
+    if (Array.isArray(audioNotesRaw)) {
+      audioNotes = audioNotesRaw as typeof audioNotes;
+    } else if (audioNotesRaw && typeof audioNotesRaw === 'object' && 'url' in (audioNotesRaw as object)) {
+      audioNotes = [audioNotesRaw as typeof audioNotes[0]];
+    }
+
+    // Sketch files
+    let sketchFiles: string[] = [];
+    const sketchFilesRaw = (quote as any).sketchFiles ?? kitchenInfo['sketchFiles'];
+    if (Array.isArray(sketchFilesRaw) && sketchFilesRaw.length > 0) {
+      sketchFiles = sketchFilesRaw as string[];
+    } else if (kitchenInfo['sketchFile'] && typeof kitchenInfo['sketchFile'] === 'string') {
+      sketchFiles = [kitchenInfo['sketchFile'] as string];
+    }
+
+    // Additional comments
+    const additionalCommentsRaw = kitchenInfo['additionalComments'] ?? (quote as any).additionalComments;
+    const additionalCommentText: string = (additionalCommentsRaw as any)?.comment ?? '';
+    const additionalMediaFiles: string[] = Array.isArray((additionalCommentsRaw as any)?.mediaFiles)
+      ? (additionalCommentsRaw as any).mediaFiles as string[]
+      : [];
+
+    // ── PRE-DESCARGAR IMÁGENES ──
+    // Campos a excluir del grid de tarjetas (se renderizan en secciones dedicadas)
+    const MEDIA_KEYS_TO_EXCLUDE = new Set([
+      'countertopsFiles', 'backsplashFiles', 'audioNotes',
+      'sketchFiles', 'sketchFile', 'additionalComments',
+    ]);
+
+    // Recolectar todas las URLs de imagen para descargar
+    interface FileWithData {
+      label: string;
+      section: 'countertops' | 'backsplash' | 'materials' | 'sketch' | 'audio' | 'additional';
+      url: string;
+      presignedUrl: string;
+      imageBuffer?: Buffer;
+    }
+    const allFilesWithData: FileWithData[] = [];
+
+    const urlsToProcess: { label: string; url: string; section: FileWithData['section'] }[] = [];
+    countertopsFiles.forEach((url, i) => {
+      if (url) urlsToProcess.push({ label: `Countertop ${i + 1}`, url, section: 'countertops' });
+    });
+    backsplashFiles.forEach((url, i) => {
+      if (url) urlsToProcess.push({ label: `Backsplash ${i + 1}`, url, section: 'backsplash' });
+    });
+    if (quote.materials?.file) {
+      urlsToProcess.push({ label: 'Materials File', url: quote.materials.file, section: 'materials' });
+    }
+    sketchFiles.forEach((url, i) => {
+      if (url) urlsToProcess.push({ label: sketchFiles.length > 1 ? `Sketch ${i + 1} of ${sketchFiles.length}` : 'Sketch', url, section: 'sketch' });
+    });
+    additionalMediaFiles.forEach((url, i) => {
+      if (url) urlsToProcess.push({ label: `Media ${i + 1}`, url, section: 'additional' });
+    });
+
+    for (const { label, url, section } of urlsToProcess) {
+      try {
+        const presignedUrl = await this.uploadService.getPresignedDownloadUrl(url);
+        const item: FileWithData = { label, url, presignedUrl, section };
+        if (this.isImageUrl(url)) {
+          try {
+            const { buffer } = await this.uploadService.getFileBuffer(url);
+            const ext = url.split('?')[0].split('.').pop()?.toLowerCase() ?? '';
+            if (!['jpg', 'jpeg', 'png'].includes(ext)) {
+              // PDFKit only supports JPEG/PNG natively — convert via sharp
+              item.imageBuffer = await (sharp as any)(buffer).jpeg({ quality: 90 }).toBuffer();
+            } else {
+              item.imageBuffer = buffer;
+            }
+          } catch (err) {
+            this.logger.warn(`Error descargando imagen para PDF (${url}): ${err}`);
+          }
+        }
+        allFilesWithData.push(item);
+      } catch (err) {
+        this.logger.warn(`No se pudo obtener URL presignada para ${url}: ${err}`);
+        allFilesWithData.push({ label, url, presignedUrl: url, section });
+      }
+    }
+
+    const filesBySection = (section: FileWithData['section']) => allFilesWithData.filter(f => f.section === section);
 
     return new Promise<Buffer>((resolve, reject) => {
-      // pdfkit tiene muchas APIs útiles (page, save, restore, etc.) que no están
-      // completamente tipadas en nuestra declaración mínima. Usamos `any` para
-      // poder aprovecharlas sin romper el tipado global.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const doc: any = new (PDFDocument as any)({ margin: 40, bufferPages: true });
       const chunks: Buffer[] = [];
@@ -534,488 +864,555 @@ export class QuoteService {
       const drawPageBackground = () => {
         const { width, height } = doc.page;
         doc.save();
-        doc.fillColor(lightSand);
-        doc.rect(0, 0, width, height).fill();
-        doc.fillColor(darkCharcoal); // Restaurar color de texto por defecto
+        doc.fillColor(backgroundColor).rect(0, 0, width, height).fill();
+        doc.fillColor(textColor);
         doc.restore();
       };
 
       const drawFooter = (pageNumber: number, pageCount: number) => {
         const { width, height, margins } = doc.page;
-        const footerText = `Page ${pageNumber} of ${pageCount} - Generated on ${new Date().toLocaleDateString()}`;
         doc.save();
-        doc.fontSize(8);
-        doc.fillColor('#535353');
-        doc.text(footerText, margins.left, height - margins.bottom + 10, {
-          width: width - margins.left - margins.right,
-          align: 'center',
-        });
+        doc.strokeColor(fogColor).lineWidth(0.5)
+          .moveTo(margins.left, height - margins.bottom + 6)
+          .lineTo(width - margins.right, height - margins.bottom + 6)
+          .stroke();
+        doc.fontSize(8).fillColor(slateColor);
+        doc.text(
+          `Page ${pageNumber} of ${pageCount} — Generated on ${new Date().toLocaleDateString('en-US')}`,
+          margins.left,
+          height - margins.bottom + 10,
+          { width: width - margins.left - margins.right, align: 'center' },
+        );
         doc.restore();
       };
 
       const pageWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
 
-      // Helper: heading bar for sections
-      const drawSectionBar = (label: string, yOffset?: number) => {
-        const top = yOffset ?? doc.y;
-        const barHeight = 22;
-        doc.save();
-        doc.fillColor(primaryGreen);
-        doc.roundedRect(doc.page.margins.left, top, pageWidth, barHeight, 4).fill();
-        doc.fillColor('#FFFFFF');
-        doc.fontSize(11).font('Helvetica-Bold');
-        doc.text(label.toUpperCase(), doc.page.margins.left + 10, top + 5, {
-          width: pageWidth - 20,
-          align: 'left',
-        });
-        doc.restore();
-        doc.fillColor(darkCharcoal); // Restaurar color de texto por defecto
-        doc.moveDown(1.8);
+      const checkPageBreak = (neededHeight: number) => {
+        if (doc.y + neededHeight > doc.page.height - doc.page.margins.bottom - 20) {
+          doc.addPage();
+          drawPageBackground();
+          doc.y = doc.page.margins.top;
+        }
       };
 
-      // Helper: information card
-      const drawInfoCard = (title: string, lines: string[]) => {
-        const cardMargin = 6;
-        const startX = doc.page.margins.left;
-        const startY = doc.y;
-
-        const cardWidth = pageWidth;
-        const estimatedHeight = 100; // Altura estimada inicial
-
-        // Dibujar fondo blanco de la tarjeta
+      // Título de sección — charcoal bold + subrayado pine (replica pantalla)
+      const drawSectionBar = (label: string) => {
+        checkPageBreak(28);
+        const top = doc.y;
         doc.save();
-        doc.fillColor('#FFFFFF');
-        doc.roundedRect(startX, startY, cardWidth, estimatedHeight, 8).fill();
-        doc.restore();
-
-        // Calcular altura real del contenido
-        doc.save();
-        doc.font('Helvetica-Bold').fontSize(11);
-        const titleHeight = doc.heightOfString(title.toUpperCase(), { width: cardWidth - cardMargin * 2 });
-        doc.font('Helvetica').fontSize(10);
-        let contentHeight = titleHeight + 6; // espacio después del título
-        lines.forEach((line) => {
-          contentHeight += doc.heightOfString(line, { width: cardWidth - cardMargin * 2 }) + 4;
-        });
-        doc.restore();
-
-        const actualHeight = contentHeight + cardMargin * 2 + 8;
-
-        // Redibujar fondo con altura correcta
-        doc.save();
-        doc.fillColor('#FFFFFF');
-        doc.roundedRect(startX, startY, cardWidth, actualHeight, 8).fill();
-        doc.restore();
-
-        // Dibujar texto
-        doc.save();
-        doc.fillColor(darkCharcoal);
-        doc.font('Helvetica-Bold').fontSize(11);
-        doc.text(title.toUpperCase(), startX + cardMargin, startY + cardMargin, {
-          width: cardWidth - cardMargin * 2,
-        });
-        
-        let textY = startY + cardMargin + titleHeight + 6;
-        doc.font('Helvetica').fontSize(10);
-        lines.forEach((line) => {
-          doc.text(line, startX + cardMargin, textY, {
-            width: cardWidth - cardMargin * 2,
-          });
-          textY += doc.heightOfString(line, { width: cardWidth - cardMargin * 2 }) + 4;
-        });
-        doc.restore();
-
-        // Dibujar borde
-        doc.save();
-        doc.roundedRect(startX, startY, cardWidth, actualHeight, 8)
-          .lineWidth(0.5)
-          .strokeColor('#D0BBA4')
+        doc.font('Helvetica-Bold').fontSize(13).fillColor(textColor);
+        doc.text(label, doc.page.margins.left, top, { width: pageWidth });
+        const labelW = doc.widthOfString(label);
+        doc.strokeColor(primaryColor).lineWidth(0.8)
+          .moveTo(doc.page.margins.left, top + 15)
+          .lineTo(doc.page.margins.left + Math.min(labelW, pageWidth), top + 15)
           .stroke();
         doc.restore();
-
-        doc.y = startY + actualHeight + 12;
-        doc.fillColor(darkCharcoal); // Asegurar color de texto para siguiente contenido
+        doc.fillColor(textColor);
+        doc.moveDown(1.5);
       };
 
-      const drawTotalCard = (total: number) => {
-        const cardHeight = 70;
-        const startX = doc.page.margins.left;
-        const startY = doc.y;
-
-        doc.save();
-        doc.fillColor(primaryGreen);
-        doc.roundedRect(startX, startY, pageWidth, cardHeight, 10)
-          .fill()
-          .strokeColor('#2b5733')
-          .lineWidth(1)
-          .stroke();
-
-        doc.fillColor('#FFFFFF');
-        doc.font('Helvetica-Bold').fontSize(10);
-        doc.text('TOTAL ESTIMATE', startX + 16, startY + 14, {
-          width: pageWidth - 32,
-          align: 'left',
-        });
-
-        doc.fontSize(22);
-        doc.text(`$ ${total.toFixed(2)}`, startX + 16, startY + 30, {
-          width: pageWidth - 32,
-          align: 'left',
-        });
-        doc.restore();
-
-        doc.y = startY + cardHeight + 16;
-        doc.fillColor(darkCharcoal); // Restaurar color de texto por defecto
-      };
-
+      // Grid de cards (3 columnas) — replica pantalla de quote-detail
       const drawKeyValueTable = (
-        title: string,
         rows: Array<{ item: string; value: string | number | boolean; linkUrl?: string }>,
       ) => {
         if (!rows.length) return;
 
-        drawSectionBar(title);
+        const cardCols = 3;
+        const cardGap = 8;
+        const cardW = (pageWidth - cardGap * (cardCols - 1)) / cardCols;
+        const labelFontSize = 7;
+        const valueFontSize = 10;
+        const padX = 6;
+        const padY = 5;
 
-        const tableX = doc.page.margins.left;
-        const tableY = doc.y;
-        const itemColWidth = pageWidth * 0.65;
-        const valueColWidth = pageWidth - itemColWidth;
+        for (let rowStart = 0; rowStart < rows.length; rowStart += cardCols) {
+          const batch = rows.slice(rowStart, rowStart + cardCols);
 
-        const rowHeight = 18;
-        let currentY = tableY;
+          const batchHeights = batch.map((row) => {
+            doc.font('Helvetica-Bold').fontSize(labelFontSize);
+            const lblH = doc.heightOfString(String(row.item).toUpperCase(), { width: cardW - padX * 2 });
+            doc.font('Helvetica').fontSize(valueFontSize);
+            const valH = doc.heightOfString(String(row.value), { width: cardW - padX * 2 });
+            return Math.max(36, padY + lblH + 4 + valH + padY);
+          });
 
-        doc.font('Helvetica-Bold').fontSize(9);
-        doc.fillColor(darkCharcoal);
-        doc.text('Item', tableX + 6, currentY + 4, { width: itemColWidth - 12 });
-        doc.text('Value', tableX + itemColWidth + 6, currentY + 4, {
-          width: valueColWidth - 12,
-        });
-        doc.rect(tableX, currentY, pageWidth, rowHeight).strokeColor('#C7B39C').lineWidth(0.5).stroke();
+          const rowH = Math.max(...batchHeights);
+          checkPageBreak(rowH + 8);
 
-        currentY += rowHeight;
+          const rowY = doc.y;
 
-        doc.font('Helvetica').fontSize(9);
+          batch.forEach((row, j) => {
+            const cx = doc.page.margins.left + j * (cardW + cardGap);
+            const cy = rowY;
 
-        rows.forEach((row, index) => {
-          const isEven = index % 2 === 1;
-          if (currentY + rowHeight > doc.page.height - doc.page.margins.bottom - 40) {
-            doc.addPage();
-            drawPageBackground();
-            currentY = doc.page.margins.top;
-          }
+            doc.save();
+            doc.fillColor(rowAltColor).roundedRect(cx, cy, cardW, rowH, 4).fill();
+            doc.strokeColor(fogColor).lineWidth(0.3).roundedRect(cx, cy, cardW, rowH, 4).stroke();
+            doc.font('Helvetica-Bold').fontSize(labelFontSize).fillColor(clayColor);
+            doc.text(String(row.item).toUpperCase(), cx + padX, cy + padY, { width: cardW - padX * 2 });
+            const lblH = doc.heightOfString(String(row.item).toUpperCase(), { width: cardW - padX * 2 });
+            const valueColor = row.linkUrl ? primaryColor : textColor;
+            doc.font(row.linkUrl ? 'Helvetica-Bold' : 'Helvetica').fontSize(valueFontSize).fillColor(valueColor);
+            if (row.linkUrl) {
+              doc.text(String(row.value), cx + padX, cy + padY + lblH + 4, {
+                width: cardW - padX * 2,
+                link: row.linkUrl,
+                underline: true,
+              });
+            } else {
+              doc.text(String(row.value), cx + padX, cy + padY + lblH + 4, { width: cardW - padX * 2 });
+            }
+            doc.restore();
+          });
 
-          doc.save();
-          if (isEven) {
-            doc.fillColor('#F7EEE5');
-          } else {
-            doc.fillColor('#FFFFFF');
-          }
-          doc.rect(tableX, currentY, pageWidth, rowHeight).fill();
-          doc.restore();
-
-          doc.save();
-          doc.fillColor(darkCharcoal);
-          doc.text(row.item, tableX + 6, currentY + 4, { width: itemColWidth - 12 });
-          const valueText = String(row.value);
-          if (row.linkUrl) {
-            doc.text(valueText, tableX + itemColWidth + 6, currentY + 4, {
-              width: valueColWidth - 12,
-              link: row.linkUrl,
-              underline: true,
-            });
-          } else {
-            doc.text(valueText, tableX + itemColWidth + 6, currentY + 4, {
-              width: valueColWidth - 12,
-            });
-          }
-          doc.restore();
-
-          currentY += rowHeight;
-        });
-
-        doc.y = currentY + 12;
+          doc.y = rowY + rowH + 6;
+        }
+        doc.y += 8;
+        doc.fillColor(textColor);
       };
 
-      const buildKeyValueRows = (data?: Record<string, unknown>) => {
-        if (!data) {
-          return [] as Array<{ item: string; value: string | number | boolean; linkUrl?: string }>;
-        }
-        const entries = Object.entries(data).filter(
-          ([, value]) =>
-            value !== undefined && value !== null && value !== '' && value !== false,
-        );
+      const buildKeyValueRows = (data?: Record<string, unknown>, excludeKeys?: Set<string>) => {
+        if (!data) return [] as Array<{ item: string; value: string | number | boolean; linkUrl?: string }>;
+        const entries = Object.entries(data).filter(([key, value]) => {
+          if (excludeKeys?.has(key)) return false;
+          if (value === undefined || value === null || value === '' || value === false) return false;
+          // Filtrar valores "none" o "No" que significan campo no aplica
+          if (typeof value === 'string') {
+            const lc = value.toLowerCase().trim();
+            if (lc === 'none' || lc === 'no' || lc === 'n/a') return false;
+          }
+          return true;
+        });
         const rows: Array<{ item: string; value: string | number | boolean; linkUrl?: string }> = [];
 
         entries.forEach(([key, value]) => {
-          // Arrays de URLs (ej. archivos)
           if (Array.isArray(value) && value.length && typeof value[0] === 'string') {
             (value as string[]).forEach((url, index) => {
-              rows.push({
-                item: `${key} ${index + 1}`,
-                value: 'View',
-                linkUrl: url,
-              });
+              rows.push({ item: `${this.formatKeyForDisplay(key)} ${index + 1}`, value: 'View', linkUrl: url });
             });
             return;
           }
-
-          // Valor tipo URL string
           if (typeof value === 'string' && /^https?:\/\//i.test(value)) {
-            rows.push({
-              item: key,
-              value: 'View',
-              linkUrl: value,
+            rows.push({ item: this.formatKeyForDisplay(key), value: this.friendlyFileName(value), linkUrl: value });
+            return;
+          }
+          if (typeof value === 'object' && value !== null && 'mediaFiles' in value && Array.isArray((value as any).mediaFiles)) {
+            const obj = value as any;
+            const text = obj.text ?? obj.content ?? obj.comment ?? obj.notes ?? obj.note ?? obj.message ?? obj.body;
+            if (text) rows.push({ item: this.formatKeyForDisplay(key), value: this.formatValueForDisplay(text) });
+            (obj.mediaFiles as string[]).forEach((url: string, index: number) => {
+              if (typeof url === 'string') rows.push({ item: `${this.formatKeyForDisplay(key)} File ${index + 1}`, value: this.friendlyFileName(url), linkUrl: url });
             });
             return;
           }
-
-          // Objetos complejos (evitar [object Object] en tabla genérica)
-          if (typeof value === 'object') {
-            // De momento se ignoran aquí; se pueden representar en secciones específicas.
-            return;
+          if (typeof value === 'object' && !Array.isArray(value)) {
+            const obj = value as Record<string, unknown>;
+            const url = obj.url ?? obj.link ?? obj.file ?? obj.src ?? obj.path;
+            if (url && typeof url === 'string' && /^https?:\/\//i.test(url)) {
+              rows.push({ item: this.formatKeyForDisplay(key), value: this.friendlyFileName(url), linkUrl: url });
+              return;
+            }
           }
-
-          rows.push({
-            item: key,
-            value: typeof value === 'number' || typeof value === 'boolean' ? value : String(value),
-          });
+          const displayValue = this.formatValueForDisplay(value);
+          if (!displayValue) return;
+          // Filtrar displayValues que empiezan con "none" (ej: "none LF", "none SF")
+          const dvLower = displayValue.toString().toLowerCase().trim();
+          if (dvLower === 'none' || dvLower.startsWith('none ') || dvLower === 'no' || dvLower === 'n/a') return;
+          rows.push({ item: this.formatKeyForDisplay(key), value: displayValue });
         });
 
         return rows;
       };
 
-      // First page background
+      // Render de imagen embebida
+      const renderImageFile = (file: FileWithData, labelText?: string) => {
+        if (!file.imageBuffer) return false;
+        checkPageBreak(140);
+        try {
+          const imgWidth = pageWidth;
+          const imgHeight = Math.min(200, pageWidth * 0.65);
+          doc.strokeColor(fogColor).lineWidth(0.4)
+            .roundedRect(doc.page.margins.left - 1, doc.y - 1, imgWidth + 2, imgHeight + 2, 3)
+            .stroke();
+          doc.image(file.imageBuffer, doc.page.margins.left, doc.y, { width: imgWidth, height: imgHeight });
+          doc.y += imgHeight + 6;
+          if (labelText) {
+            doc.font('Helvetica').fontSize(8).fillColor(slateColor);
+            doc.text(labelText, doc.page.margins.left, doc.y, { width: pageWidth });
+            doc.y += 8;
+          }
+          return true;
+        } catch (err) {
+          this.logger.warn(`Error incrustando imagen en PDF: ${err}`);
+          return false;
+        }
+      };
+
+      // Render de link de archivo (no imagen)
+      const renderFileLink = (file: FileWithData) => {
+        const linkCardH = 24;
+        checkPageBreak(linkCardH + 6);
+        doc.save();
+        doc.fillColor(rowAltColor).roundedRect(doc.page.margins.left, doc.y, pageWidth, linkCardH, 4).fill();
+        doc.strokeColor(fogColor).lineWidth(0.3).roundedRect(doc.page.margins.left, doc.y, pageWidth, linkCardH, 4).stroke();
+        doc.font('Helvetica-Bold').fontSize(8).fillColor(clayColor);
+        const typeLabel = this.isImageUrl(file.url) ? 'IMAGE' : (file.url.match(/\.(mp4|mov|mkv|avi|webm)/i) ? 'VIDEO' : 'FILE');
+        doc.text(typeLabel, doc.page.margins.left + 8, doc.y + 5, { width: 50 });
+        const typeLabelW = doc.widthOfString(typeLabel);
+        doc.strokeColor(fogColor).lineWidth(0.3)
+          .moveTo(doc.page.margins.left + 8 + typeLabelW + 4, doc.y - 2)
+          .lineTo(doc.page.margins.left + 8 + typeLabelW + 4, doc.y + linkCardH - 4)
+          .stroke();
+        const friendlyName = this.friendlyFileName(file.url);
+        const truncatedName = friendlyName.length > 60 ? friendlyName.substring(0, 57) + '...' : friendlyName;
+        doc.font('Helvetica').fontSize(9).fillColor(primaryColor);
+        doc.text(truncatedName, doc.page.margins.left + 8 + typeLabelW + 10, doc.y + 5, {
+          width: pageWidth - 16 - typeLabelW - 10,
+          link: file.presignedUrl,
+          underline: true,
+        });
+        doc.restore();
+        doc.y += linkCardH + 5;
+      };
+
+      // Render de un archivo (imagen embebida o link)
+      const renderFile = (file: FileWithData, labelText?: string) => {
+        if (file.imageBuffer) {
+          renderImageFile(file, labelText);
+        } else {
+          renderFileLink(file);
+        }
+      };
+
+      // ══════════════════════════════════════════
+      // INICIO DEL DOCUMENTO
+      // ══════════════════════════════════════════
       drawPageBackground();
 
-      // === HEADER / COVER ===
-      const headerHeight = 70;
+      // ── HEADER ── barra pine + fondo sand
+      const headerHeight = 50;
       doc.save();
-      doc.fillColor(lightSand);
-      doc.rect(doc.page.margins.left * 0.5, doc.page.margins.top * 0.5, doc.page.width - doc.page.margins.left, headerHeight)
-        .fill();
-      doc.restore();
-
-      doc.save();
-      doc.fillColor(darkCharcoal);
-      doc.font('Helvetica-Bold').fontSize(26);
-      doc.text('BA Kitchen & Bath Design', doc.page.margins.left, doc.page.margins.top + 10, {
-        width: pageWidth,
-        align: 'center',
-      });
-
-      doc.fontSize(13);
-      doc.text('PROFESSIONAL ESTIMATE REPORT', doc.page.margins.left, doc.page.margins.top + 40, {
-        width: pageWidth,
-        align: 'center',
+      doc.fillColor(primaryColor).rect(0, 0, doc.page.width, 3).fill();
+      doc.fillColor(sandColor).rect(0, 3, doc.page.width, headerHeight - 3).fill();
+      const baX = doc.page.margins.left;
+      const baY = doc.page.margins.top + 2;
+      doc.font('Helvetica-Bold').fontSize(16).fillColor(textColor);
+      doc.text('BA', baX, baY, { continued: true });
+      doc.fillColor(primaryColor);
+      doc.text(' Kitchen & Bath Design', { continued: false });
+      doc.font('Helvetica').fontSize(7).fillColor(slateColor);
+      doc.text('PROFESSIONAL ESTIMATE REPORT', doc.page.margins.left, baY + 4, {
+        width: doc.page.width - doc.page.margins.left - doc.page.margins.right,
+        align: 'right',
       });
       doc.restore();
-      doc.fillColor(darkCharcoal); // Asegurar color de texto por defecto
+      doc.strokeColor(primaryColor).lineWidth(0.6)
+        .moveTo(0, headerHeight).lineTo(doc.page.width, headerHeight).stroke();
+      doc.y = headerHeight + 16;
 
-      // Thin green line
+      // ── HERO: "Estimate v{n}" izquierda + Total derecha ──
+      const titleY = doc.y;
+      const totalStr = `$${quote.totalPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+      // Título izquierdo: "Estimate v1" en dos colores
       doc.save();
-      doc.moveTo(doc.page.margins.left, doc.page.margins.top + headerHeight + 10)
-        .lineTo(doc.page.margins.left + pageWidth, doc.page.margins.top + headerHeight + 10)
-        .strokeColor(primaryGreen)
-        .lineWidth(2)
-        .stroke();
+      doc.font('Helvetica-Bold').fontSize(22).fillColor(textColor);
+      doc.text('Estimate ', doc.page.margins.left, titleY, { continued: true });
+      doc.fillColor(primaryColor);
+      doc.text(`v${quote.versionNumber}`, { continued: false });
       doc.restore();
 
-      doc.y = doc.page.margins.top + headerHeight + 30;
-
-      // === ESTIMATE TITLE BAR ===
-      const barHeight = 26;
-      const barWidth = pageWidth * 0.8;
-      const barX = doc.page.margins.left + (pageWidth - barWidth) / 2;
-      const barY = doc.y;
+      // Label "TOTAL COST" a la derecha (fontSize 8, align right)
       doc.save();
-      doc.fillColor(primaryGreen);
-      doc.roundedRect(barX, barY, barWidth, barHeight, 12).fill();
-      doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(12);
-      doc.text(
-        `Estimate v${quote.versionNumber} - ${categoryLabel}`,
-        barX,
-        barY + 6,
-        { width: barWidth, align: 'center' },
-      );
+      doc.font('Helvetica').fontSize(8).fillColor(clayColor);
+      doc.text('TOTAL COST', doc.page.margins.left, titleY + 2, {
+        width: pageWidth,
+        align: 'right',
+        lineBreak: false,
+      });
       doc.restore();
-      doc.fillColor(darkCharcoal); // Restaurar color de texto por defecto
 
-      doc.y = barY + barHeight + 24;
+      // Monto total a la derecha (fontSize 22, align right)
+      doc.save();
+      doc.font('Helvetica-Bold').fontSize(22).fillColor(textColor);
+      doc.text(totalStr, doc.page.margins.left, titleY + 14, {
+        width: pageWidth,
+        align: 'right',
+        lineBreak: false,
+      });
+      doc.restore();
 
-      // === MAIN INFO BLOCKS ===
-      drawInfoCard('CUSTOMER INFORMATION', [
-        `Name: ${customerName}`,
-        `Email: ${customerEmail}`,
-        `Phone: ${customerPhone}`,
-      ]);
+      // Fecha
+      doc.save();
+      doc.font('Helvetica').fontSize(9).fillColor(slateColor);
+      doc.text(creationDate, doc.page.margins.left, titleY + 42);
+      doc.restore();
 
-      drawInfoCard('PROJECT DETAILS', [
-        `Experience: ${experience}`,
-        `Status: ${status}`,
-        `Date: ${creationDate}`,
-        `Project: ${project?.name ?? 'N/A'}`,
-      ]);
+      doc.y = titleY + 58;
 
-      // === TOTAL HIGHLIGHT ===
-      drawTotalCard(quote.totalPrice);
+      // ── DOS TARJETAS: Customer Information + Project Details ──
+      const infoCardW = (pageWidth - 12) / 2;
+      const notesText = quote.notes || '';
+      // Calcular altura del card de proyecto
+      const projCardBaseH = 80;
+      const projCardNotesH = notesText
+        ? (doc.font('Helvetica').fontSize(8).heightOfString(notesText, { width: infoCardW - 16 }) + 20)
+        : 0;
+      const infoCardH = Math.max(projCardBaseH, projCardBaseH + projCardNotesH);
+      const infoCardY = doc.y;
 
-      // === NOTES (INTERNAL ONLY) ===
-      if (isInternalView) {
-        const notesText = quote.notes || 'No additional notes.';
-        drawSectionBar('Notes');
-        doc.save();
-        doc.fillColor('#FFFFFF');
-        doc.roundedRect(doc.page.margins.left, doc.y, pageWidth, 80, 8)
-          .fill()
-          .strokeColor('#D0BBA4')
-          .lineWidth(0.5)
-          .stroke();
-        doc.restore();
+      // Customer card
+      doc.save();
+      doc.fillColor('#FFFFFF').roundedRect(doc.page.margins.left, infoCardY, infoCardW, infoCardH, 5).fill();
+      doc.strokeColor(fogColor).lineWidth(0.4).roundedRect(doc.page.margins.left, infoCardY, infoCardW, infoCardH, 5).stroke();
+      doc.font('Helvetica-Bold').fontSize(7.5).fillColor(clayColor);
+      doc.text('CUSTOMER INFORMATION', doc.page.margins.left + 8, infoCardY + 8, { width: infoCardW - 16 });
+      doc.strokeColor(fogColor).lineWidth(0.3)
+        .moveTo(doc.page.margins.left + 8, infoCardY + 19)
+        .lineTo(doc.page.margins.left + infoCardW - 8, infoCardY + 19).stroke();
+      doc.font('Helvetica-Bold').fontSize(9.5).fillColor(textColor);
+      doc.text(customerName, doc.page.margins.left + 8, infoCardY + 24);
+      doc.font('Helvetica').fontSize(9).fillColor(primaryColor);
+      doc.text(customerEmail, doc.page.margins.left + 8, infoCardY + 38);
+      doc.fillColor(slateColor);
+      doc.text(customerPhone, doc.page.margins.left + 8, infoCardY + 52);
+      doc.restore();
 
-        doc.save();
-        doc.font('Helvetica').fontSize(10).fillColor(darkCharcoal);
-        doc.text(notesText, doc.page.margins.left + 10, doc.y + 10, {
-          width: pageWidth - 20,
-          align: 'left',
-        });
-        doc.restore();
-        doc.fillColor(darkCharcoal); // Restaurar color de texto
-
-        doc.y += 80 + 16;
+      // Project Details card
+      const projCardX = doc.page.margins.left + infoCardW + 12;
+      doc.save();
+      doc.fillColor('#FFFFFF').roundedRect(projCardX, infoCardY, infoCardW, infoCardH, 5).fill();
+      doc.strokeColor(fogColor).lineWidth(0.4).roundedRect(projCardX, infoCardY, infoCardW, infoCardH, 5).stroke();
+      doc.font('Helvetica-Bold').fontSize(7.5).fillColor(clayColor);
+      doc.text('PROJECT DETAILS', projCardX + 8, infoCardY + 8, { width: infoCardW - 16 });
+      doc.strokeColor(fogColor).lineWidth(0.3)
+        .moveTo(projCardX + 8, infoCardY + 19)
+        .lineTo(projCardX + infoCardW - 8, infoCardY + 19).stroke();
+      doc.font('Helvetica').fontSize(8.5).fillColor(slateColor);
+      doc.text('Experience Level', projCardX + 8, infoCardY + 24);
+      doc.font('Helvetica-Bold').fontSize(9.5).fillColor(textColor);
+      doc.text(experience, projCardX + 8, infoCardY + 34);
+      let projY = infoCardY + 50;
+      if (notesText) {
+        doc.font('Helvetica').fontSize(8).fillColor(slateColor);
+        doc.text('Notes', projCardX + 8, projY);
+        projY += 10;
+        doc.font('Helvetica').fontSize(8.5).fillColor(textColor);
+        doc.text(notesText, projCardX + 8, projY, { width: infoCardW - 16 });
       }
+      doc.restore();
 
-      // === CATEGORY INFORMATION SECTION ===
+      doc.y = infoCardY + infoCardH + 20;
+
+      // ══════════════════════════════════════════
+      // SECCIÓN: INFORMACIÓN DE LA CATEGORÍA
+      // ══════════════════════════════════════════
       const categoryTitle =
-        quote.category === QuoteCategory.KITCHEN
-          ? 'KITCHEN INFORMATION'
-          : quote.category === QuoteCategory.BATHROOM
-            ? 'BATHROOM INFORMATION'
-            : quote.category === QuoteCategory.BASEMENT
-              ? 'BASEMENT INFORMATION'
-              : quote.category === QuoteCategory.ADDITIONAL_WORK
-                ? 'ADDITIONAL WORK INFORMATION'
-                : 'ESTIMATE INFORMATION';
+        quote.category === QuoteCategory.KITCHEN ? 'Kitchen Information'
+          : quote.category === QuoteCategory.BATHROOM ? 'Bathroom Information'
+            : quote.category === QuoteCategory.BASEMENT ? 'Basement Information'
+              : quote.category === QuoteCategory.ADDITIONAL_WORK ? 'Additional Work Information'
+                : 'Estimate Information';
 
-      drawSectionBar(categoryTitle);
-
-      const infoBlocks: Array<{ title: string; data?: Record<string, unknown> }> = [];
+      const infoBlocks: Array<{ title: string; data?: Record<string, unknown>; isSubCategory?: boolean }> = [];
       if (quote.kitchenInformation) {
-        infoBlocks.push({
-          title: 'Kitchen Details',
-          data: quote.kitchenInformation as Record<string, unknown>,
-        });
+        infoBlocks.push({ title: categoryTitle, data: quote.kitchenInformation as Record<string, unknown> });
       }
       if (quote.bathroomInformation) {
-        infoBlocks.push({
-          title: 'Bathroom Details',
-          data: quote.bathroomInformation as Record<string, unknown>,
-        });
+        infoBlocks.push({ title: 'Bathroom Information', data: quote.bathroomInformation as Record<string, unknown> });
       }
       if (quote.basementInformation) {
-        infoBlocks.push({
-          title: 'Basement Details',
-          data: quote.basementInformation as Record<string, unknown>,
-        });
+        infoBlocks.push({ title: 'Basement Information', data: quote.basementInformation as Record<string, unknown> });
       }
       if (quote.additionalWorkInformation) {
-        infoBlocks.push({
-          title: 'Additional Work Details',
-          data: quote.additionalWorkInformation as Record<string, unknown>,
-        });
+        infoBlocks.push({ title: 'Additional Work Information', data: quote.additionalWorkInformation as Record<string, unknown> });
       }
 
-      infoBlocks.forEach((block, index) => {
-        if (doc.y > doc.page.height - doc.page.margins.bottom - 120) {
-          doc.addPage();
-          drawPageBackground();
-        }
-
-        drawSectionBar(block.title, doc.y);
-        const rows = buildKeyValueRows(block.data);
-        if (rows.length) {
-          drawKeyValueTable(block.title, rows);
-        }
-
-        if (index < infoBlocks.length - 1) {
-          doc.moveDown(1);
-        }
+      infoBlocks.forEach((block) => {
+        const rows = buildKeyValueRows(block.data, MEDIA_KEYS_TO_EXCLUDE);
+        if (!rows.length) return;
+        drawSectionBar(block.title);
+        drawKeyValueTable(rows);
       });
 
-      // === FILES & MATERIALS SECTIONS ===
-      const allFiles: { label: string; url: string }[] = [];
-      if (quote.countertopsFiles?.length) {
-        quote.countertopsFiles.forEach((url, index) => {
-          allFiles.push({ label: `Countertop File ${index + 1}`, url });
-        });
-      }
-      if (quote.backsplashFiles?.length) {
-        quote.backsplashFiles.forEach((url, index) => {
-          allFiles.push({ label: `Backsplash File ${index + 1}`, url });
-        });
-      }
-      if (quote.materials?.file) {
-        allFiles.push({ label: 'Materials File', url: quote.materials.file });
+      // ══════════════════════════════════════════
+      // SECCIÓN: COUNTERTOPS FILES
+      // ══════════════════════════════════════════
+      const countertopsData = filesBySection('countertops');
+      if (countertopsData.length > 0) {
+        drawSectionBar('Countertops Files');
+        for (const file of countertopsData) {
+          const label = countertopsData.length > 1 ? file.label : undefined;
+          renderFile(file, label);
+          doc.y += 4;
+        }
+        doc.y += 4;
       }
 
-      if (allFiles.length || quote.materials?.items?.length) {
-        if (doc.y > doc.page.height - doc.page.margins.bottom - 140) {
-          doc.addPage();
-          drawPageBackground();
+      // ══════════════════════════════════════════
+      // SECCIÓN: BACKSPLASH FILES
+      // ══════════════════════════════════════════
+      const backsplashData = filesBySection('backsplash');
+      if (backsplashData.length > 0) {
+        drawSectionBar('Backsplash Files');
+        for (const file of backsplashData) {
+          const label = backsplashData.length > 1 ? file.label : undefined;
+          renderFile(file, label);
+          doc.y += 4;
+        }
+        doc.y += 4;
+      }
+
+      // ══════════════════════════════════════════
+      // SECCIÓN: MATERIALS LIST
+      // ══════════════════════════════════════════
+      const materialsFileData = filesBySection('materials');
+      const hasMaterials = materialsFileData.length > 0 || (quote.materials?.items?.length ?? 0) > 0;
+      if (hasMaterials) {
+        drawSectionBar('Materials List');
+
+        // Materials file
+        if (materialsFileData.length > 0) {
+          checkPageBreak(20);
+          doc.font('Helvetica-Bold').fontSize(10).fillColor(textColor);
+          doc.text('Materials File', doc.page.margins.left + 2, doc.y);
+          doc.y += 8;
+          renderFile(materialsFileData[0]);
+        }
+
+        // Materials items table
+        if (quote.materials?.items?.length) {
+          checkPageBreak(40);
+          doc.font('Helvetica-Bold').fontSize(10).fillColor(textColor);
+          doc.text('Materials Items', doc.page.margins.left + 2, doc.y);
+          doc.y += 10;
+
+          const col1W = pageWidth * 0.22;
+          const col2W = pageWidth * 0.78;
+          const rowH = 10;
+
+          // Header de tabla
+          doc.save();
+          doc.fillColor('#F0F0F0').rect(doc.page.margins.left + 2, doc.y - 4, pageWidth - 4, rowH).fill();
+          doc.font('Helvetica-Bold').fontSize(9).fillColor(textColor);
+          doc.text('Quantity', doc.page.margins.left + 6, doc.y);
+          doc.text('Description', doc.page.margins.left + col1W + 6, doc.y);
+          doc.restore();
+          doc.y += rowH + 4;
+
+          for (const item of quote.materials.items) {
+            checkPageBreak(18);
+            doc.strokeColor('#F0F0F0').lineWidth(0.1)
+              .moveTo(doc.page.margins.left + 2, doc.y - 2)
+              .lineTo(doc.page.margins.left + pageWidth - 2, doc.y - 2).stroke();
+            doc.font('Helvetica-Bold').fontSize(9).fillColor(textColor);
+            doc.text(String(item.quantity), doc.page.margins.left + 6, doc.y, { width: col1W });
+            doc.font('Helvetica').fontSize(9).fillColor(slateColor);
+            const descLines = doc.heightOfString(item.description, { width: col2W - 12 });
+            doc.text(this.toTitleCase(item.description), doc.page.margins.left + col1W + 6, doc.y, { width: col2W - 12 });
+            doc.y += Math.max(rowH, descLines);
+          }
+          doc.y += 8;
         }
       }
 
-      if (allFiles.length) {
-        drawSectionBar('Files & Attachments');
-        doc.font('Helvetica').fontSize(9).fillColor(darkCharcoal);
-        allFiles.forEach((file) => {
-          doc
-            .fillColor(primaryGreen)
-            .text(`${file.label}: View`, {
-              link: file.url,
-              underline: true,
-            })
-            .fillColor(darkCharcoal);
-          doc.moveDown(0.2);
-        });
-      }
-
-      if (quote.materials?.items?.length) {
-        drawSectionBar('Materials');
-        const materialRows = quote.materials.items.map((m) => ({
-          item: String(m.quantity),
-          value: m.description,
-        }));
-        drawKeyValueTable('Materials', materialRows);
-      }
-
-      // === INTERNAL ONLY: ADDITIONAL COMMENTS & AUDIO NOTES PLACEHOLDER ===
-      if (isInternalView) {
-        if (doc.y > doc.page.height - doc.page.margins.bottom - 140) {
-          doc.addPage();
-          drawPageBackground();
-        }
-
-        drawSectionBar('Additional Comments & Media');
-        doc.font('Helvetica').fontSize(9).fillColor(darkCharcoal);
-        doc.text(
-          'Internal section reserved for design team comments, sketches, drawings and associated media. (To be extended with concrete data when available).',
-          {
-            width: pageWidth,
-          },
-        );
-        doc.moveDown(2);
-
+      // ══════════════════════════════════════════
+      // SECCIÓN: AUDIO NOTES (interno)
+      // ══════════════════════════════════════════
+      if (audioNotes.length > 0) {
         drawSectionBar('Audio Notes');
-        doc.text(
-          'Internal section listing audio notes, summaries and transcriptions (if provided for this estimate).',
-          {
-            width: pageWidth,
-          },
-        );
+
+        for (let i = 0; i < audioNotes.length; i++) {
+          const note = audioNotes[i];
+          if (!note?.url) continue;
+
+          checkPageBreak(24);
+          const noteTitle = audioNotes.length > 1 ? `Audio Note ${i + 1} of ${audioNotes.length}` : 'Audio Note';
+          doc.font('Helvetica-Bold').fontSize(10).fillColor(textColor);
+          doc.text(noteTitle, doc.page.margins.left + 2, doc.y);
+          doc.y += 6;
+
+          // Link del audio
+          const audioFile: FileWithData = {
+            label: noteTitle,
+            url: note.url,
+            presignedUrl: note.url,
+            section: 'audio',
+          };
+          renderFileLink(audioFile);
+
+          if (note.summary) {
+            checkPageBreak(30);
+            doc.font('Helvetica-Bold').fontSize(9).fillColor(textColor);
+            doc.text('Summary:', doc.page.margins.left + 4, doc.y);
+            doc.y += 5;
+            doc.font('Helvetica').fontSize(8.5).fillColor(slateColor);
+            doc.text(note.summary, doc.page.margins.left + 4, doc.y, { width: pageWidth - 8 });
+            doc.y += doc.heightOfString(note.summary, { width: pageWidth - 8 }) + 6;
+          }
+
+          if (note.transcription) {
+            checkPageBreak(30);
+            doc.font('Helvetica-Bold').fontSize(9).fillColor(textColor);
+            doc.text('Transcription:', doc.page.margins.left + 4, doc.y);
+            doc.y += 5;
+            doc.font('Helvetica-Oblique').fontSize(7.5).fillColor('#888888');
+            doc.text(note.transcription, doc.page.margins.left + 4, doc.y, { width: pageWidth - 8 });
+            doc.y += doc.heightOfString(note.transcription, { width: pageWidth - 8 }) + 6;
+          }
+
+          doc.y += 6;
+        }
       }
 
-      // === FOOTERS FOR ALL PAGES ===
-      // El fondo ya se dibuja al crear cada página; aquí solo añadimos el footer
+      // ══════════════════════════════════════════
+      // SECCIÓN: SKETCHES & DRAWINGS
+      // ══════════════════════════════════════════
+      const sketchData = filesBySection('sketch');
+      if (sketchData.length > 0) {
+        drawSectionBar('Sketches & Drawings');
+        for (const file of sketchData) {
+          const label = sketchData.length > 1 ? file.label : undefined;
+          renderFile(file, label);
+          doc.y += 4;
+        }
+        doc.y += 4;
+      }
+
+      // ══════════════════════════════════════════
+      // SECCIÓN: ADDITIONAL COMMENTS & MEDIA (interno)
+      // ══════════════════════════════════════════
+      const additionalData = filesBySection('additional');
+      if (additionalCommentText || additionalData.length > 0) {
+        drawSectionBar('Additional Comments & Media');
+
+        if (additionalCommentText) {
+          checkPageBreak(24);
+          doc.font('Helvetica-Bold').fontSize(10).fillColor(textColor);
+          doc.text('Comments', doc.page.margins.left + 2, doc.y);
+          doc.y += 6;
+          doc.font('Helvetica').fontSize(9).fillColor(slateColor);
+          doc.text(additionalCommentText, doc.page.margins.left + 2, doc.y, { width: pageWidth - 4 });
+          doc.y += doc.heightOfString(additionalCommentText, { width: pageWidth - 4 }) + 8;
+        }
+
+        if (additionalData.length > 0) {
+          checkPageBreak(20);
+          doc.font('Helvetica-Bold').fontSize(10).fillColor(textColor);
+          doc.text('Photos & Videos', doc.page.margins.left + 2, doc.y);
+          doc.y += 8;
+          for (const file of additionalData) {
+            renderFile(file);
+            doc.y += 4;
+          }
+        }
+      }
+
+      // ══════════════════════════════════════════
+      // FOOTERS EN TODAS LAS PÁGINAS
+      // ══════════════════════════════════════════
       const pageRange = doc.bufferedPageRange();
       for (let i = pageRange.start; i < pageRange.start + pageRange.count; i += 1) {
         doc.switchToPage(i);
@@ -1032,6 +1429,7 @@ export class QuoteService {
     category?: QuoteCategory,
     status?: QuoteStatus,
     userId?: string,
+    customerId?: string,
   ): Promise<Quote[]> {
     const filter: Record<string, unknown> = {};
 
@@ -1040,6 +1438,13 @@ export class QuoteService {
         throw new BadRequestException('Invalid companyId format');
       }
       filter.companyId = new Types.ObjectId(companyId);
+    }
+
+    if (customerId) {
+      if (!Types.ObjectId.isValid(customerId)) {
+        throw new BadRequestException('Invalid customerId format');
+      }
+      filter.customerId = new Types.ObjectId(customerId);
     }
 
     if (projectId) {
@@ -1083,6 +1488,40 @@ export class QuoteService {
     }
 
     return quote as Quote;
+  }
+
+  async getOrCreatePdfUrl(id: string): Promise<string> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new BadRequestException('Invalid ID format');
+    }
+
+    const quoteDoc = await this.quoteModel.findById(id).exec();
+    if (!quoteDoc) {
+      throw new NotFoundException(`Quote with ID ${id} not found`);
+    }
+
+    const [project, customer, company] = await Promise.all([
+      this.projectModel.findById(quoteDoc.projectId).lean().exec(),
+      this.customerModel.findById(quoteDoc.customerId).lean().exec(),
+      this.companyModel.findById(quoteDoc.companyId).lean().exec(),
+    ]);
+
+    if (!project || !customer || !company) {
+      throw new NotFoundException('Could not resolve project/customer/company to generate PDF');
+    }
+
+    const pdfUrl = await this.ensurePdfUrl(
+      quoteDoc,
+      project as unknown as Project,
+      customer as unknown as Customer,
+      company as unknown as Company,
+    );
+
+    if (!pdfUrl) {
+      throw new BadRequestException('Could not generate PDF for this quote');
+    }
+
+    return pdfUrl;
   }
 
   async findByProjectId(projectId: string): Promise<Quote[]> {
@@ -1365,6 +1804,39 @@ export class QuoteService {
     });
 
     await existingQuote.save();
+
+    const [project, customer, company] = await Promise.all([
+      this.projectModel.findById(existingQuote.projectId).lean().exec(),
+      this.customerModel.findById(existingQuote.customerId).lean().exec(),
+      this.companyModel.findById(existingQuote.companyId).lean().exec(),
+    ]);
+
+    // Generar PDF y subir a S3 si aún no tiene uno
+    if (project && customer && company) {
+      await this.ensurePdfUrl(
+        existingQuote, 
+        project as unknown as Project, 
+        customer as unknown as Customer, 
+        company as unknown as Company
+      );
+    }
+
+    const customerUserId = (customer as { userId?: { toString(): string } } | null)?.userId?.toString();
+    if (customerUserId) {
+      this.notificationService
+        .create({
+          userId: customerUserId,
+          type: NotificationType.QUOTE_SENT,
+          payload: {
+            projectName: project && typeof project === 'object' && 'name' in project ? (project as { name: string }).name : 'Project',
+            quoteId: id,
+            quoteVersion: existingQuote.versionNumber,
+          },
+          channels: ['in_app', 'email', 'sms'],
+        })
+        .catch((err) => this.logger.warn(`Notification failed: ${err instanceof Error ? err.message : String(err)}`));
+    }
+
     return existingQuote.toObject();
   }
 

@@ -30,7 +30,7 @@ RUN npm install --only=production && npm cache clean --force
 COPY --from=builder /usr/src/app/dist ./dist
 
 # Exponer el puerto en el que correrá la aplicación
-EXPOSE 3022
+EXPOSE 3000
 
 # Comando para iniciar la aplicación en producción
 CMD [ "node", "dist/main" ]

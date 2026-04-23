@@ -8,6 +8,12 @@ import { Customer, CustomerSchema } from '../customer/entities/customer.entity';
 import { Company, CompanySchema } from '../company/schemas/company.schema';
 import { MailModule } from '../mail/mail.module';
 import { StatusHistoryModule } from '../status-history/status-history.module';
+import { UploadModule } from '../upload/upload.module';
+import { AuthModule } from '../auth/auth.module';
+import { NotificationModule } from '../notification/notification.module';
+import { RoleModule } from '../role/role.module';
+import { CustomerModule } from '../customer/customer.module';
+import { ProjectModule } from '../project/project.module';
 
 @Module({
   imports: [
@@ -17,8 +23,14 @@ import { StatusHistoryModule } from '../status-history/status-history.module';
       { name: Customer.name, schema: CustomerSchema },
       { name: Company.name, schema: CompanySchema },
     ]),
+    AuthModule,
     MailModule,
     StatusHistoryModule,
+    UploadModule,
+    NotificationModule,
+    RoleModule,
+    CustomerModule,
+    ProjectModule,
   ],
   controllers: [QuoteController],
   providers: [QuoteService],
