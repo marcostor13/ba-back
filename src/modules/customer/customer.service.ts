@@ -204,6 +204,10 @@ export class CustomerService {
     return password;
   }
 
+  async createFromInvite(data: Record<string, unknown>): Promise<void> {
+    await this.customerModel.create(data);
+  }
+
   private buildFullName(dto: CreateCustomerDto): string {
     const parts = [dto.name, dto.lastName].filter(Boolean);
     return parts.length ? parts.join(' ') : dto.email;

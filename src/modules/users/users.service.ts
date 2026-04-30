@@ -10,6 +10,7 @@ export interface IUser {
     email: string;
     name: string;
     password?: string;
+    forcePasswordChange?: boolean;
     resetCodeHash?: string;
     resetCodeExpiresAt?: Date;
     verificationCodeHash?: string;
@@ -38,6 +39,7 @@ export class UsersService {
             email: user.email,
             name: user.name,
             password: user.password,
+            forcePasswordChange: user.forcePasswordChange,
             resetCodeHash: user.resetCodeHash,
             resetCodeExpiresAt: user.resetCodeExpiresAt,
             verificationCodeHash: user.verificationCodeHash,
@@ -92,10 +94,27 @@ export class UsersService {
         await this.userModel
             .findByIdAndUpdate(
                 objectId,
-                { password: hashedPassword, resetCodeHash: undefined, resetCodeExpiresAt: undefined },
+                { password: hashedPassword, resetCodeHash: undefined, resetCodeExpiresAt: undefined, forcePasswordChange: false },
                 { new: true },
             )
             .exec();
+    }
+
+    async createByAdmin(data: { email: string; name: string; password: string }): Promise<IUser> {
+        const hashedPassword = await bcrypt.hash(data.password, 10);
+        const created = new this.userModel({
+            email: data.email,
+            name: data.name,
+            password: hashedPassword,
+            forcePasswordChange: true,
+        });
+        const saved = await created.save();
+        return { _id: saved._id, email: saved.email, name: saved.name, forcePasswordChange: true };
+    }
+
+    async changePasswordPlain(userId: string | Types.ObjectId, newPassword: string): Promise<void> {
+        const hashed = await bcrypt.hash(newPassword, 10);
+        await this.updatePassword(userId, hashed);
     }
 
     async setPasswordResetCode(
@@ -212,6 +231,20 @@ export class UsersService {
             name: user.name,
             roles: rolesByUserId.get(user._id.toString()) || [],
         }));
+    }
+
+    async updateProfile(id: string | Types.ObjectId, data: { name?: string; email?: string }): Promise<IUser | null> {
+        const objectId = typeof id === 'string' ? new Types.ObjectId(id) : id;
+        const update: Record<string, string> = {};
+        if (data.name) update.name = data.name;
+        if (data.email) update.email = data.email;
+        const updated = await this.userModel
+            .findByIdAndUpdate(objectId, { $set: update }, { new: true })
+            .select('-password -resetCodeHash -resetCodeExpiresAt')
+            .lean()
+            .exec();
+        if (!updated) return null;
+        return { _id: updated._id, email: updated.email, name: updated.name };
     }
 
     async findById(id: string | Types.ObjectId): Promise<IUser | null> {

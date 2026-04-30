@@ -5,6 +5,7 @@ import { InvoiceController } from './invoice.controller';
 import { Invoice, InvoiceSchema } from './schemas/invoice.schema';
 import { Quote, QuoteSchema } from '../quote/schemas/quote.schema';
 import { Project, ProjectSchema } from '../project/schemas/project.schema';
+import { RoleModule } from '../role/role.module';
 
 @Module({
   imports: [
@@ -13,6 +14,7 @@ import { Project, ProjectSchema } from '../project/schemas/project.schema';
       { name: Quote.name, schema: QuoteSchema },
       { name: Project.name, schema: ProjectSchema },
     ]),
+    RoleModule,
   ],
   controllers: [InvoiceController],
   providers: [InvoiceService],

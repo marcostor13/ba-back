@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import OpenAI from 'openai'
 import { toFile } from 'openai/uploads'
+import { GoogleGenAI } from '@google/genai'
 import * as ffmpeg from 'fluent-ffmpeg'
 import ffmpegPath from 'ffmpeg-static'
 import { Readable } from 'stream'
@@ -14,15 +15,33 @@ import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3'
 export class AudioService {
   private readonly logger = new Logger(AudioService.name)
   private readonly openai: OpenAI
+  private readonly gemini?: GoogleGenAI
+  private readonly llmProvider: 'openai' | 'gemini'
   private readonly s3Client: S3Client
   private ffmpegAvailable = false
   private readonly summaryMinRatio: number
 
   constructor(private readonly configService: ConfigService) {
-    // Inicializar cliente de OpenAI para transcripción
+    // Provider selection
+    const providerRaw = (this.configService.get<string>('LLM_PROVIDER') ?? 'openai').toLowerCase()
+
     this.openai = new OpenAI({
       apiKey: this.configService.get<string>('OPENAI_API_KEY'),
     })
+
+    const googleApiKey = this.configService.get<string>('GOOGLE_AI_API_KEY')
+    if (providerRaw === 'gemini' && googleApiKey) {
+      this.gemini = new GoogleGenAI({ apiKey: googleApiKey })
+      this.llmProvider = 'gemini'
+      this.logger.log('[LLM] Proveedor: Gemini (gemini-2.0-flash)')
+    } else {
+      this.llmProvider = 'openai'
+      if (providerRaw === 'gemini') {
+        this.logger.warn('[LLM] LLM_PROVIDER=gemini pero GOOGLE_AI_API_KEY no encontrada. Usando OpenAI.')
+      } else {
+        this.logger.log('[LLM] Proveedor: OpenAI')
+      }
+    }
 
     // Configurar ruta de ffmpeg si está disponible (ffmpeg-static, require dinámico o env var)
     try {
@@ -266,7 +285,14 @@ export class AudioService {
         uploadName = file.originalname
       }
 
-      // 2) Convertir el buffer a un File compatible con el SDK de OpenAI
+      // 2) Transcribir con el proveedor configurado
+      if (this.llmProvider === 'gemini' && this.gemini) {
+        const text = await this.transcribeWithGemini(uploadBuffer, uploadMime)
+        if (!text) throw new Error('Respuesta vacía de la API de transcripción (Gemini)')
+        return text
+      }
+
+      // OpenAI Whisper
       const uploadFile = await toFile(uploadBuffer, uploadName, {
         type: uploadMime,
       })
@@ -590,6 +616,10 @@ export class AudioService {
         : transcription
 
     try {
+      if (this.llmProvider === 'gemini' && this.gemini) {
+        return await this.structureWithGemini(sourceText)
+      }
+
       const completion = await this.openai.chat.completions.create({
         model: 'gpt-5.1',
         temperature: 0.2,
@@ -670,6 +700,13 @@ export class AudioService {
       const estimatedTokens = Math.min(3500, Math.ceil(target / 4) + 200)
 
       try {
+        if (this.llmProvider === 'gemini' && this.gemini) {
+          const expanded = await this.expandWithGemini({ current, sourceSample, minChars })
+          if (expanded) current = expanded
+          else break
+          continue
+        }
+
         const completion = await this.openai.chat.completions.create({
           model: 'gpt-4o',
           temperature: 0.3,
@@ -732,5 +769,110 @@ export class AudioService {
     }
 
     return current
+  }
+
+  // ---------------------------------------------------------------------------
+  // Gemini provider methods
+  // ---------------------------------------------------------------------------
+
+  private async transcribeWithGemini(buffer: Buffer, mimeType: string): Promise<string> {
+    const base64Audio = buffer.toString('base64')
+    const safeMime = mimeType?.startsWith('audio/') ? mimeType : 'audio/mp3'
+
+    const response = await this.gemini!.models.generateContent({
+      model: 'gemini-2.0-flash',
+      contents: [
+        {
+          parts: [
+            { inlineData: { mimeType: safeMime, data: base64Audio } },
+            { text: 'Transcribe this audio accurately in Spanish. Return only the transcription text, no additional commentary.' },
+          ],
+        },
+      ],
+      config: { temperature: 0.1, maxOutputTokens: 8192 },
+    })
+
+    const text = (response as any).text?.trim?.() ?? ''
+    if (!text) throw new Error('Gemini transcripción vacía')
+    return text
+  }
+
+  private async structureWithGemini(sourceText: string): Promise<string> {
+    const systemInstruction = [
+      'You are an expert in information gathering for construction/remodeling projects (kitchens, bathrooms).',
+      'Improve the transcribed text without summarizing. Preserve ALL information the client communicates.',
+      'CLASSIFY the information into logical sections. Section titles in English and UPPERCASE.',
+      'Present content as a list under each section ("- " prefix). No loose paragraphs.',
+      'One blank line between sections. Plain text only (no Markdown, JSON, or HTML).',
+      'Always output in English, translating from the source language if needed. Never invent data.',
+    ].join(' ')
+
+    const userPrompt = [
+      'Organize the following audio transcription for information gathering.',
+      'Include ALL information. Classify into sections. Use list items.',
+      '',
+      'Transcription:',
+      '<<<',
+      sourceText,
+      '>>>',
+      '',
+      'Respond only with the organized text.',
+    ].join('\n')
+
+    try {
+      const response = await this.gemini!.models.generateContent({
+        model: 'gemini-2.0-flash',
+        contents: [{ parts: [{ text: userPrompt }] }],
+        config: { systemInstruction, temperature: 0.2, maxOutputTokens: 4000 },
+      })
+      return (response as any).text?.trim?.() || sourceText
+    } catch (e: any) {
+      this.logger.warn(`[Gemini] Error estructurando: ${e?.message || e}`)
+      return sourceText
+    }
+  }
+
+  private async expandWithGemini(params: {
+    current: string
+    sourceSample: string
+    minChars: number
+  }): Promise<string> {
+    const { current, sourceSample, minChars } = params
+
+    const userPrompt = [
+      'Rewrite and expand the following summary:',
+      `- Minimum length: ${minChars} characters.`,
+      '- Output in English only. Preserve facts, do not invent.',
+      '- SECTION TITLES IN UPPERCASE. One blank line between sections.',
+      '- List items with "- ". Plain structured text only.',
+      '',
+      'Source context:',
+      '<<<',
+      sourceSample,
+      '>>>',
+      '',
+      'Current summary:',
+      '<<<',
+      current,
+      '>>>',
+      '',
+      'Respond only with the new summary.',
+    ].join('\n')
+
+    try {
+      const response = await this.gemini!.models.generateContent({
+        model: 'gemini-2.0-flash',
+        contents: [{ parts: [{ text: userPrompt }] }],
+        config: {
+          systemInstruction: 'Expert writing assistant. Output in English only. Preserve fidelity.',
+          temperature: 0.3,
+          maxOutputTokens: 3500,
+        },
+      })
+      return (response as any).text?.trim?.() || ''
+    } catch (e: any) {
+      this.logger.error(`[Gemini] Error expandiendo: ${e?.message || e}`)
+      return ''
+    }
   }
 }

@@ -120,6 +120,9 @@ export class Quote {
 
   @Prop({ type: Boolean, default: false })
   isChangeOrder: boolean;
+
+  @Prop({ type: Boolean, default: true })
+  isActive: boolean;
 }
 
 export const QuoteSchema = SchemaFactory.createForClass(Quote);

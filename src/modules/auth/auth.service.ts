@@ -10,6 +10,7 @@ import { ConfirmPasswordResetDto } from './dto/confirm-password-reset.dto';
 import { RequestRegistrationCodeDto } from './dto/request-registration-code.dto';
 import { ConfirmRegistrationDto } from './dto/confirm-registration.dto';
 import { CustomerService } from '../customer/customer.service';
+import { Types } from 'mongoose';
 
 @Injectable()
 export class AuthService {
@@ -79,7 +80,13 @@ export class AuthService {
         const payload = { email: user.email, sub: user._id, };
         return {
             access_token: this.jwtService.sign(payload),
-            user: { id: user._id, email: user.email, name: user.name, role: role.name },
+            user: {
+                id: user._id,
+                email: user.email,
+                name: user.name,
+                role: role.name,
+                forcePasswordChange: user.forcePasswordChange ?? false,
+            },
         };
     }
 
@@ -253,6 +260,26 @@ export class AuthService {
 
         // Crear rol de customer
         const role = await this.roleService.create({ name: 'customer', userId: newUser._id });
+
+        // Si viene de un invite link, crear registro de customer vinculado al estimador
+        if (confirmRegistrationDto.estimatorId) {
+            try {
+                const customerData: Record<string, unknown> = {
+                    email: newUser.email,
+                    name: newUser.name || email.split('@')[0],
+                    userId: newUser._id,
+                };
+                if (Types.ObjectId.isValid(confirmRegistrationDto.estimatorId)) {
+                    (customerData as any).estimatorId = new Types.ObjectId(confirmRegistrationDto.estimatorId);
+                }
+                if (confirmRegistrationDto.companyId && Types.ObjectId.isValid(confirmRegistrationDto.companyId)) {
+                    customerData.companyId = new Types.ObjectId(confirmRegistrationDto.companyId);
+                }
+                await this.customerService.createFromInvite(customerData);
+            } catch {
+                // Non-fatal: customer stub creation failure should not block login
+            }
+        }
 
         // Generar token JWT
         const payload = { email: newUser.email, sub: newUser._id };

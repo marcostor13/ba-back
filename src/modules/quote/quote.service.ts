@@ -15,7 +15,7 @@ import { NotificationService } from '../notification/notification.service';
 import { NotificationType } from '../notification/schemas/notification.schema';
 import { StatusHistoryService } from '../status-history/status-history.service';
 import { UploadService } from '../upload/upload.service';
-import * as PDFDocument from 'pdfkit';
+import * as puppeteer from 'puppeteer';
 import * as sharp from 'sharp';
 
 @Injectable()
@@ -84,7 +84,17 @@ export class QuoteService {
     }
 
     const created = await this.quoteModel.create(quoteData);
-    
+
+    // Deactivate all previous quotes for this project (make them read-only)
+    await this.quoteModel.updateMany(
+      {
+        projectId: new Types.ObjectId(dto.projectId),
+        _id: { $ne: created._id },
+        isActive: true,
+      },
+      { $set: { isActive: false } },
+    );
+
     // Record initial status
     await this.statusHistoryService.recordTransition({
       entityId: created._id.toString(),
@@ -805,6 +815,7 @@ export class QuoteService {
       url: string;
       presignedUrl: string;
       imageBuffer?: Buffer;
+      dataUri?: string;
     }
     const allFilesWithData: FileWithData[] = [];
 
@@ -834,7 +845,7 @@ export class QuoteService {
             const { buffer } = await this.uploadService.getFileBuffer(url);
             const ext = url.split('?')[0].split('.').pop()?.toLowerCase() ?? '';
             if (!['jpg', 'jpeg', 'png'].includes(ext)) {
-              // PDFKit only supports JPEG/PNG natively — convert via sharp
+              // convert non-JPEG/PNG to JPEG for base64 embedding
               item.imageBuffer = await (sharp as any)(buffer).jpeg({ quality: 90 }).toBuffer();
             } else {
               item.imageBuffer = buffer;
@@ -850,577 +861,370 @@ export class QuoteService {
       }
     }
 
-    const filesBySection = (section: FileWithData['section']) => allFilesWithData.filter(f => f.section === section);
-
-    return new Promise<Buffer>((resolve, reject) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const doc: any = new (PDFDocument as any)({ margin: 40, bufferPages: true });
-      const chunks: Buffer[] = [];
-
-      doc.on('data', (chunk: Buffer) => chunks.push(chunk));
-      doc.on('end', () => resolve(Buffer.concat(chunks)));
-      doc.on('error', (err: Error) => reject(err));
-
-      const drawPageBackground = () => {
-        const { width, height } = doc.page;
-        doc.save();
-        doc.fillColor(backgroundColor).rect(0, 0, width, height).fill();
-        doc.fillColor(textColor);
-        doc.restore();
-      };
-
-      const drawFooter = (pageNumber: number, pageCount: number) => {
-        const { width, height, margins } = doc.page;
-        doc.save();
-        doc.strokeColor(fogColor).lineWidth(0.5)
-          .moveTo(margins.left, height - margins.bottom + 6)
-          .lineTo(width - margins.right, height - margins.bottom + 6)
-          .stroke();
-        doc.fontSize(8).fillColor(slateColor);
-        doc.text(
-          `Page ${pageNumber} of ${pageCount} — Generated on ${new Date().toLocaleDateString('en-US')}`,
-          margins.left,
-          height - margins.bottom + 10,
-          { width: width - margins.left - margins.right, align: 'center' },
-        );
-        doc.restore();
-      };
-
-      const pageWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
-
-      const checkPageBreak = (neededHeight: number) => {
-        if (doc.y + neededHeight > doc.page.height - doc.page.margins.bottom - 20) {
-          doc.addPage();
-          drawPageBackground();
-          doc.y = doc.page.margins.top;
-        }
-      };
-
-      // Título de sección — charcoal bold + subrayado pine (replica pantalla)
-      const drawSectionBar = (label: string) => {
-        checkPageBreak(28);
-        const top = doc.y;
-        doc.save();
-        doc.font('Helvetica-Bold').fontSize(13).fillColor(textColor);
-        doc.text(label, doc.page.margins.left, top, { width: pageWidth });
-        const labelW = doc.widthOfString(label);
-        doc.strokeColor(primaryColor).lineWidth(0.8)
-          .moveTo(doc.page.margins.left, top + 15)
-          .lineTo(doc.page.margins.left + Math.min(labelW, pageWidth), top + 15)
-          .stroke();
-        doc.restore();
-        doc.fillColor(textColor);
-        doc.moveDown(1.5);
-      };
-
-      // Grid de cards (3 columnas) — replica pantalla de quote-detail
-      const drawKeyValueTable = (
-        rows: Array<{ item: string; value: string | number | boolean; linkUrl?: string }>,
-      ) => {
-        if (!rows.length) return;
-
-        const cardCols = 3;
-        const cardGap = 8;
-        const cardW = (pageWidth - cardGap * (cardCols - 1)) / cardCols;
-        const labelFontSize = 7;
-        const valueFontSize = 10;
-        const padX = 6;
-        const padY = 5;
-
-        for (let rowStart = 0; rowStart < rows.length; rowStart += cardCols) {
-          const batch = rows.slice(rowStart, rowStart + cardCols);
-
-          const batchHeights = batch.map((row) => {
-            doc.font('Helvetica-Bold').fontSize(labelFontSize);
-            const lblH = doc.heightOfString(String(row.item).toUpperCase(), { width: cardW - padX * 2 });
-            doc.font('Helvetica').fontSize(valueFontSize);
-            const valH = doc.heightOfString(String(row.value), { width: cardW - padX * 2 });
-            return Math.max(36, padY + lblH + 4 + valH + padY);
-          });
-
-          const rowH = Math.max(...batchHeights);
-          checkPageBreak(rowH + 8);
-
-          const rowY = doc.y;
-
-          batch.forEach((row, j) => {
-            const cx = doc.page.margins.left + j * (cardW + cardGap);
-            const cy = rowY;
-
-            doc.save();
-            doc.fillColor(rowAltColor).roundedRect(cx, cy, cardW, rowH, 4).fill();
-            doc.strokeColor(fogColor).lineWidth(0.3).roundedRect(cx, cy, cardW, rowH, 4).stroke();
-            doc.font('Helvetica-Bold').fontSize(labelFontSize).fillColor(clayColor);
-            doc.text(String(row.item).toUpperCase(), cx + padX, cy + padY, { width: cardW - padX * 2 });
-            const lblH = doc.heightOfString(String(row.item).toUpperCase(), { width: cardW - padX * 2 });
-            const valueColor = row.linkUrl ? primaryColor : textColor;
-            doc.font(row.linkUrl ? 'Helvetica-Bold' : 'Helvetica').fontSize(valueFontSize).fillColor(valueColor);
-            if (row.linkUrl) {
-              doc.text(String(row.value), cx + padX, cy + padY + lblH + 4, {
-                width: cardW - padX * 2,
-                link: row.linkUrl,
-                underline: true,
-              });
-            } else {
-              doc.text(String(row.value), cx + padX, cy + padY + lblH + 4, { width: cardW - padX * 2 });
-            }
-            doc.restore();
-          });
-
-          doc.y = rowY + rowH + 6;
-        }
-        doc.y += 8;
-        doc.fillColor(textColor);
-      };
-
-      const buildKeyValueRows = (data?: Record<string, unknown>, excludeKeys?: Set<string>) => {
-        if (!data) return [] as Array<{ item: string; value: string | number | boolean; linkUrl?: string }>;
-        const entries = Object.entries(data).filter(([key, value]) => {
-          if (excludeKeys?.has(key)) return false;
-          if (value === undefined || value === null || value === '' || value === false) return false;
-          // Filtrar valores "none" o "No" que significan campo no aplica
-          if (typeof value === 'string') {
-            const lc = value.toLowerCase().trim();
-            if (lc === 'none' || lc === 'no' || lc === 'n/a') return false;
-          }
-          return true;
-        });
-        const rows: Array<{ item: string; value: string | number | boolean; linkUrl?: string }> = [];
-
-        entries.forEach(([key, value]) => {
-          if (Array.isArray(value) && value.length && typeof value[0] === 'string') {
-            (value as string[]).forEach((url, index) => {
-              rows.push({ item: `${this.formatKeyForDisplay(key)} ${index + 1}`, value: 'View', linkUrl: url });
-            });
-            return;
-          }
-          if (typeof value === 'string' && /^https?:\/\//i.test(value)) {
-            rows.push({ item: this.formatKeyForDisplay(key), value: this.friendlyFileName(value), linkUrl: value });
-            return;
-          }
-          if (typeof value === 'object' && value !== null && 'mediaFiles' in value && Array.isArray((value as any).mediaFiles)) {
-            const obj = value as any;
-            const text = obj.text ?? obj.content ?? obj.comment ?? obj.notes ?? obj.note ?? obj.message ?? obj.body;
-            if (text) rows.push({ item: this.formatKeyForDisplay(key), value: this.formatValueForDisplay(text) });
-            (obj.mediaFiles as string[]).forEach((url: string, index: number) => {
-              if (typeof url === 'string') rows.push({ item: `${this.formatKeyForDisplay(key)} File ${index + 1}`, value: this.friendlyFileName(url), linkUrl: url });
-            });
-            return;
-          }
-          if (typeof value === 'object' && !Array.isArray(value)) {
-            const obj = value as Record<string, unknown>;
-            const url = obj.url ?? obj.link ?? obj.file ?? obj.src ?? obj.path;
-            if (url && typeof url === 'string' && /^https?:\/\//i.test(url)) {
-              rows.push({ item: this.formatKeyForDisplay(key), value: this.friendlyFileName(url), linkUrl: url });
-              return;
-            }
-          }
-          const displayValue = this.formatValueForDisplay(value);
-          if (!displayValue) return;
-          // Filtrar displayValues que empiezan con "none" (ej: "none LF", "none SF")
-          const dvLower = displayValue.toString().toLowerCase().trim();
-          if (dvLower === 'none' || dvLower.startsWith('none ') || dvLower === 'no' || dvLower === 'n/a') return;
-          rows.push({ item: this.formatKeyForDisplay(key), value: displayValue });
-        });
-
-        return rows;
-      };
-
-      // Render de imagen embebida
-      const renderImageFile = (file: FileWithData, labelText?: string) => {
-        if (!file.imageBuffer) return false;
-        checkPageBreak(140);
-        try {
-          const imgWidth = pageWidth;
-          const imgHeight = Math.min(200, pageWidth * 0.65);
-          doc.strokeColor(fogColor).lineWidth(0.4)
-            .roundedRect(doc.page.margins.left - 1, doc.y - 1, imgWidth + 2, imgHeight + 2, 3)
-            .stroke();
-          doc.image(file.imageBuffer, doc.page.margins.left, doc.y, { width: imgWidth, height: imgHeight });
-          doc.y += imgHeight + 6;
-          if (labelText) {
-            doc.font('Helvetica').fontSize(8).fillColor(slateColor);
-            doc.text(labelText, doc.page.margins.left, doc.y, { width: pageWidth });
-            doc.y += 8;
-          }
-          return true;
-        } catch (err) {
-          this.logger.warn(`Error incrustando imagen en PDF: ${err}`);
-          return false;
-        }
-      };
-
-      // Render de link de archivo (no imagen)
-      const renderFileLink = (file: FileWithData) => {
-        const linkCardH = 24;
-        checkPageBreak(linkCardH + 6);
-        doc.save();
-        doc.fillColor(rowAltColor).roundedRect(doc.page.margins.left, doc.y, pageWidth, linkCardH, 4).fill();
-        doc.strokeColor(fogColor).lineWidth(0.3).roundedRect(doc.page.margins.left, doc.y, pageWidth, linkCardH, 4).stroke();
-        doc.font('Helvetica-Bold').fontSize(8).fillColor(clayColor);
-        const typeLabel = this.isImageUrl(file.url) ? 'IMAGE' : (file.url.match(/\.(mp4|mov|mkv|avi|webm)/i) ? 'VIDEO' : 'FILE');
-        doc.text(typeLabel, doc.page.margins.left + 8, doc.y + 5, { width: 50 });
-        const typeLabelW = doc.widthOfString(typeLabel);
-        doc.strokeColor(fogColor).lineWidth(0.3)
-          .moveTo(doc.page.margins.left + 8 + typeLabelW + 4, doc.y - 2)
-          .lineTo(doc.page.margins.left + 8 + typeLabelW + 4, doc.y + linkCardH - 4)
-          .stroke();
-        const friendlyName = this.friendlyFileName(file.url);
-        const truncatedName = friendlyName.length > 60 ? friendlyName.substring(0, 57) + '...' : friendlyName;
-        doc.font('Helvetica').fontSize(9).fillColor(primaryColor);
-        doc.text(truncatedName, doc.page.margins.left + 8 + typeLabelW + 10, doc.y + 5, {
-          width: pageWidth - 16 - typeLabelW - 10,
-          link: file.presignedUrl,
-          underline: true,
-        });
-        doc.restore();
-        doc.y += linkCardH + 5;
-      };
-
-      // Render de un archivo (imagen embebida o link)
-      const renderFile = (file: FileWithData, labelText?: string) => {
-        if (file.imageBuffer) {
-          renderImageFile(file, labelText);
-        } else {
-          renderFileLink(file);
-        }
-      };
-
-      // ══════════════════════════════════════════
-      // INICIO DEL DOCUMENTO
-      // ══════════════════════════════════════════
-      drawPageBackground();
-
-      // ── HEADER ── barra pine + fondo sand
-      const headerHeight = 50;
-      doc.save();
-      doc.fillColor(primaryColor).rect(0, 0, doc.page.width, 3).fill();
-      doc.fillColor(sandColor).rect(0, 3, doc.page.width, headerHeight - 3).fill();
-      const baX = doc.page.margins.left;
-      const baY = doc.page.margins.top + 2;
-      doc.font('Helvetica-Bold').fontSize(16).fillColor(textColor);
-      doc.text('BA', baX, baY, { continued: true });
-      doc.fillColor(primaryColor);
-      doc.text(' Kitchen & Bath Design', { continued: false });
-      doc.font('Helvetica').fontSize(7).fillColor(slateColor);
-      doc.text('PROFESSIONAL ESTIMATE REPORT', doc.page.margins.left, baY + 4, {
-        width: doc.page.width - doc.page.margins.left - doc.page.margins.right,
-        align: 'right',
-      });
-      doc.restore();
-      doc.strokeColor(primaryColor).lineWidth(0.6)
-        .moveTo(0, headerHeight).lineTo(doc.page.width, headerHeight).stroke();
-      doc.y = headerHeight + 16;
-
-      // ── HERO: "Estimate v{n}" izquierda + Total derecha ──
-      const titleY = doc.y;
-      const totalStr = `$${quote.totalPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-
-      // Título izquierdo: "Estimate v1" en dos colores
-      doc.save();
-      doc.font('Helvetica-Bold').fontSize(22).fillColor(textColor);
-      doc.text('Estimate ', doc.page.margins.left, titleY, { continued: true });
-      doc.fillColor(primaryColor);
-      doc.text(`v${quote.versionNumber}`, { continued: false });
-      doc.restore();
-
-      // Label "TOTAL COST" a la derecha (fontSize 8, align right)
-      doc.save();
-      doc.font('Helvetica').fontSize(8).fillColor(clayColor);
-      doc.text('TOTAL COST', doc.page.margins.left, titleY + 2, {
-        width: pageWidth,
-        align: 'right',
-        lineBreak: false,
-      });
-      doc.restore();
-
-      // Monto total a la derecha (fontSize 22, align right)
-      doc.save();
-      doc.font('Helvetica-Bold').fontSize(22).fillColor(textColor);
-      doc.text(totalStr, doc.page.margins.left, titleY + 14, {
-        width: pageWidth,
-        align: 'right',
-        lineBreak: false,
-      });
-      doc.restore();
-
-      // Fecha
-      doc.save();
-      doc.font('Helvetica').fontSize(9).fillColor(slateColor);
-      doc.text(creationDate, doc.page.margins.left, titleY + 42);
-      doc.restore();
-
-      doc.y = titleY + 58;
-
-      // ── DOS TARJETAS: Customer Information + Project Details ──
-      const infoCardW = (pageWidth - 12) / 2;
-      const notesText = quote.notes || '';
-      // Calcular altura del card de proyecto
-      const projCardBaseH = 80;
-      const projCardNotesH = notesText
-        ? (doc.font('Helvetica').fontSize(8).heightOfString(notesText, { width: infoCardW - 16 }) + 20)
-        : 0;
-      const infoCardH = Math.max(projCardBaseH, projCardBaseH + projCardNotesH);
-      const infoCardY = doc.y;
-
-      // Customer card
-      doc.save();
-      doc.fillColor('#FFFFFF').roundedRect(doc.page.margins.left, infoCardY, infoCardW, infoCardH, 5).fill();
-      doc.strokeColor(fogColor).lineWidth(0.4).roundedRect(doc.page.margins.left, infoCardY, infoCardW, infoCardH, 5).stroke();
-      doc.font('Helvetica-Bold').fontSize(7.5).fillColor(clayColor);
-      doc.text('CUSTOMER INFORMATION', doc.page.margins.left + 8, infoCardY + 8, { width: infoCardW - 16 });
-      doc.strokeColor(fogColor).lineWidth(0.3)
-        .moveTo(doc.page.margins.left + 8, infoCardY + 19)
-        .lineTo(doc.page.margins.left + infoCardW - 8, infoCardY + 19).stroke();
-      doc.font('Helvetica-Bold').fontSize(9.5).fillColor(textColor);
-      doc.text(customerName, doc.page.margins.left + 8, infoCardY + 24);
-      doc.font('Helvetica').fontSize(9).fillColor(primaryColor);
-      doc.text(customerEmail, doc.page.margins.left + 8, infoCardY + 38);
-      doc.fillColor(slateColor);
-      doc.text(customerPhone, doc.page.margins.left + 8, infoCardY + 52);
-      doc.restore();
-
-      // Project Details card
-      const projCardX = doc.page.margins.left + infoCardW + 12;
-      doc.save();
-      doc.fillColor('#FFFFFF').roundedRect(projCardX, infoCardY, infoCardW, infoCardH, 5).fill();
-      doc.strokeColor(fogColor).lineWidth(0.4).roundedRect(projCardX, infoCardY, infoCardW, infoCardH, 5).stroke();
-      doc.font('Helvetica-Bold').fontSize(7.5).fillColor(clayColor);
-      doc.text('PROJECT DETAILS', projCardX + 8, infoCardY + 8, { width: infoCardW - 16 });
-      doc.strokeColor(fogColor).lineWidth(0.3)
-        .moveTo(projCardX + 8, infoCardY + 19)
-        .lineTo(projCardX + infoCardW - 8, infoCardY + 19).stroke();
-      doc.font('Helvetica').fontSize(8.5).fillColor(slateColor);
-      doc.text('Experience Level', projCardX + 8, infoCardY + 24);
-      doc.font('Helvetica-Bold').fontSize(9.5).fillColor(textColor);
-      doc.text(experience, projCardX + 8, infoCardY + 34);
-      let projY = infoCardY + 50;
-      if (notesText) {
-        doc.font('Helvetica').fontSize(8).fillColor(slateColor);
-        doc.text('Notes', projCardX + 8, projY);
-        projY += 10;
-        doc.font('Helvetica').fontSize(8.5).fillColor(textColor);
-        doc.text(notesText, projCardX + 8, projY, { width: infoCardW - 16 });
+    // Compute base64 data URIs for inline image embedding
+    for (const file of allFilesWithData) {
+      if (file.imageBuffer) {
+        const ext = file.url.split('?')[0].split('.').pop()?.toLowerCase() ?? '';
+        const mimeType = ext === 'png' ? 'image/png' : 'image/jpeg';
+        file.dataUri = `data:${mimeType};base64,${file.imageBuffer.toString('base64')}`;
       }
-      doc.restore();
+    }
 
-      doc.y = infoCardY + infoCardH + 20;
+    const notesText = quote.notes || '';
+    const kitchenSizeText = (kitchenInfo['type'] as string) || '';
+    const sqFtText = kitchenInfo['kitchenSquareFootage'] ? `${kitchenInfo['kitchenSquareFootage']} SF` : '';
+    const ceilingText = kitchenInfo['ceilingHeight'] ? `${kitchenInfo['ceilingHeight']} ft` : '';
+    const clientBudgetText = (quote as any).clientBudget
+      ? `$${Number((quote as any).clientBudget).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+      : '';
+    const roughQuoteText = (quote as any).roughQuote
+      ? `$${Number((quote as any).roughQuote).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+      : '';
 
-      // ══════════════════════════════════════════
-      // SECCIÓN: INFORMACIÓN DE LA CATEGORÍA
-      // ══════════════════════════════════════════
-      const categoryTitle =
-        quote.category === QuoteCategory.KITCHEN ? 'Kitchen Information'
-          : quote.category === QuoteCategory.BATHROOM ? 'Bathroom Information'
-            : quote.category === QuoteCategory.BASEMENT ? 'Basement Information'
-              : quote.category === QuoteCategory.ADDITIONAL_WORK ? 'Additional Work Information'
-                : 'Estimate Information';
-
-      const infoBlocks: Array<{ title: string; data?: Record<string, unknown>; isSubCategory?: boolean }> = [];
-      if (quote.kitchenInformation) {
-        infoBlocks.push({ title: categoryTitle, data: quote.kitchenInformation as Record<string, unknown> });
-      }
-      if (quote.bathroomInformation) {
-        infoBlocks.push({ title: 'Bathroom Information', data: quote.bathroomInformation as Record<string, unknown> });
-      }
-      if (quote.basementInformation) {
-        infoBlocks.push({ title: 'Basement Information', data: quote.basementInformation as Record<string, unknown> });
-      }
-      if (quote.additionalWorkInformation) {
-        infoBlocks.push({ title: 'Additional Work Information', data: quote.additionalWorkInformation as Record<string, unknown> });
-      }
-
-      infoBlocks.forEach((block) => {
-        const rows = buildKeyValueRows(block.data, MEDIA_KEYS_TO_EXCLUDE);
-        if (!rows.length) return;
-        drawSectionBar(block.title);
-        drawKeyValueTable(rows);
-      });
-
-      // ══════════════════════════════════════════
-      // SECCIÓN: COUNTERTOPS FILES
-      // ══════════════════════════════════════════
-      const countertopsData = filesBySection('countertops');
-      if (countertopsData.length > 0) {
-        drawSectionBar('Countertops Files');
-        for (const file of countertopsData) {
-          const label = countertopsData.length > 1 ? file.label : undefined;
-          renderFile(file, label);
-          doc.y += 4;
-        }
-        doc.y += 4;
-      }
-
-      // ══════════════════════════════════════════
-      // SECCIÓN: BACKSPLASH FILES
-      // ══════════════════════════════════════════
-      const backsplashData = filesBySection('backsplash');
-      if (backsplashData.length > 0) {
-        drawSectionBar('Backsplash Files');
-        for (const file of backsplashData) {
-          const label = backsplashData.length > 1 ? file.label : undefined;
-          renderFile(file, label);
-          doc.y += 4;
-        }
-        doc.y += 4;
-      }
-
-      // ══════════════════════════════════════════
-      // SECCIÓN: MATERIALS LIST
-      // ══════════════════════════════════════════
-      const materialsFileData = filesBySection('materials');
-      const hasMaterials = materialsFileData.length > 0 || (quote.materials?.items?.length ?? 0) > 0;
-      if (hasMaterials) {
-        drawSectionBar('Materials List');
-
-        // Materials file
-        if (materialsFileData.length > 0) {
-          checkPageBreak(20);
-          doc.font('Helvetica-Bold').fontSize(10).fillColor(textColor);
-          doc.text('Materials File', doc.page.margins.left + 2, doc.y);
-          doc.y += 8;
-          renderFile(materialsFileData[0]);
-        }
-
-        // Materials items table
-        if (quote.materials?.items?.length) {
-          checkPageBreak(40);
-          doc.font('Helvetica-Bold').fontSize(10).fillColor(textColor);
-          doc.text('Materials Items', doc.page.margins.left + 2, doc.y);
-          doc.y += 10;
-
-          const col1W = pageWidth * 0.22;
-          const col2W = pageWidth * 0.78;
-          const rowH = 10;
-
-          // Header de tabla
-          doc.save();
-          doc.fillColor('#F0F0F0').rect(doc.page.margins.left + 2, doc.y - 4, pageWidth - 4, rowH).fill();
-          doc.font('Helvetica-Bold').fontSize(9).fillColor(textColor);
-          doc.text('Quantity', doc.page.margins.left + 6, doc.y);
-          doc.text('Description', doc.page.margins.left + col1W + 6, doc.y);
-          doc.restore();
-          doc.y += rowH + 4;
-
-          for (const item of quote.materials.items) {
-            checkPageBreak(18);
-            doc.strokeColor('#F0F0F0').lineWidth(0.1)
-              .moveTo(doc.page.margins.left + 2, doc.y - 2)
-              .lineTo(doc.page.margins.left + pageWidth - 2, doc.y - 2).stroke();
-            doc.font('Helvetica-Bold').fontSize(9).fillColor(textColor);
-            doc.text(String(item.quantity), doc.page.margins.left + 6, doc.y, { width: col1W });
-            doc.font('Helvetica').fontSize(9).fillColor(slateColor);
-            const descLines = doc.heightOfString(item.description, { width: col2W - 12 });
-            doc.text(this.toTitleCase(item.description), doc.page.margins.left + col1W + 6, doc.y, { width: col2W - 12 });
-            doc.y += Math.max(rowH, descLines);
-          }
-          doc.y += 8;
-        }
-      }
-
-      // ══════════════════════════════════════════
-      // SECCIÓN: AUDIO NOTES (interno)
-      // ══════════════════════════════════════════
-      if (audioNotes.length > 0) {
-        drawSectionBar('Audio Notes');
-
-        for (let i = 0; i < audioNotes.length; i++) {
-          const note = audioNotes[i];
-          if (!note?.url) continue;
-
-          checkPageBreak(24);
-          const noteTitle = audioNotes.length > 1 ? `Audio Note ${i + 1} of ${audioNotes.length}` : 'Audio Note';
-          doc.font('Helvetica-Bold').fontSize(10).fillColor(textColor);
-          doc.text(noteTitle, doc.page.margins.left + 2, doc.y);
-          doc.y += 6;
-
-          // Link del audio
-          const audioFile: FileWithData = {
-            label: noteTitle,
-            url: note.url,
-            presignedUrl: note.url,
-            section: 'audio',
-          };
-          renderFileLink(audioFile);
-
-          if (note.summary) {
-            checkPageBreak(30);
-            doc.font('Helvetica-Bold').fontSize(9).fillColor(textColor);
-            doc.text('Summary:', doc.page.margins.left + 4, doc.y);
-            doc.y += 5;
-            doc.font('Helvetica').fontSize(8.5).fillColor(slateColor);
-            doc.text(note.summary, doc.page.margins.left + 4, doc.y, { width: pageWidth - 8 });
-            doc.y += doc.heightOfString(note.summary, { width: pageWidth - 8 }) + 6;
-          }
-
-          if (note.transcription) {
-            checkPageBreak(30);
-            doc.font('Helvetica-Bold').fontSize(9).fillColor(textColor);
-            doc.text('Transcription:', doc.page.margins.left + 4, doc.y);
-            doc.y += 5;
-            doc.font('Helvetica-Oblique').fontSize(7.5).fillColor('#888888');
-            doc.text(note.transcription, doc.page.margins.left + 4, doc.y, { width: pageWidth - 8 });
-            doc.y += doc.heightOfString(note.transcription, { width: pageWidth - 8 }) + 6;
-          }
-
-          doc.y += 6;
-        }
-      }
-
-      // ══════════════════════════════════════════
-      // SECCIÓN: SKETCHES & DRAWINGS
-      // ══════════════════════════════════════════
-      const sketchData = filesBySection('sketch');
-      if (sketchData.length > 0) {
-        drawSectionBar('Sketches & Drawings');
-        for (const file of sketchData) {
-          const label = sketchData.length > 1 ? file.label : undefined;
-          renderFile(file, label);
-          doc.y += 4;
-        }
-        doc.y += 4;
-      }
-
-      // ══════════════════════════════════════════
-      // SECCIÓN: ADDITIONAL COMMENTS & MEDIA (interno)
-      // ══════════════════════════════════════════
-      const additionalData = filesBySection('additional');
-      if (additionalCommentText || additionalData.length > 0) {
-        drawSectionBar('Additional Comments & Media');
-
-        if (additionalCommentText) {
-          checkPageBreak(24);
-          doc.font('Helvetica-Bold').fontSize(10).fillColor(textColor);
-          doc.text('Comments', doc.page.margins.left + 2, doc.y);
-          doc.y += 6;
-          doc.font('Helvetica').fontSize(9).fillColor(slateColor);
-          doc.text(additionalCommentText, doc.page.margins.left + 2, doc.y, { width: pageWidth - 4 });
-          doc.y += doc.heightOfString(additionalCommentText, { width: pageWidth - 4 }) + 8;
-        }
-
-        if (additionalData.length > 0) {
-          checkPageBreak(20);
-          doc.font('Helvetica-Bold').fontSize(10).fillColor(textColor);
-          doc.text('Photos & Videos', doc.page.margins.left + 2, doc.y);
-          doc.y += 8;
-          for (const file of additionalData) {
-            renderFile(file);
-            doc.y += 4;
-          }
-        }
-      }
-
-      // ══════════════════════════════════════════
-      // FOOTERS EN TODAS LAS PÁGINAS
-      // ══════════════════════════════════════════
-      const pageRange = doc.bufferedPageRange();
-      for (let i = pageRange.start; i < pageRange.start + pageRange.count; i += 1) {
-        doc.switchToPage(i);
-        drawFooter(i - pageRange.start + 1, pageRange.count);
-      }
-
-      doc.end();
+    const html = this.buildPdfHtml({
+      quote,
+      customerName,
+      customerEmail,
+      customerPhone,
+      experience,
+      creationDate,
+      kitchenInfo,
+      allFilesWithData,
+      audioNotes,
+      additionalCommentText,
+      clientBudgetText,
+      roughQuoteText,
+      notesText,
+      kitchenSizeText,
+      sqFtText,
+      ceilingText,
+      MEDIA_KEYS_TO_EXCLUDE,
     });
+
+    const browser = await (puppeteer as any).launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+    });
+    try {
+      const page = await browser.newPage();
+      await page.setContent(html, { waitUntil: 'networkidle0' });
+      const pdfBuffer = await page.pdf({
+        format: 'A4',
+        printBackground: true,
+        margin: { top: '0', right: '0', bottom: '0', left: '0' },
+      });
+      return Buffer.from(pdfBuffer);
+    } finally {
+      await browser.close();
+    }
+
+    return Buffer.alloc(0);
+  }
+
+  private buildPdfHtml(data: {
+    quote: Quote;
+    customerName: string;
+    customerEmail: string;
+    customerPhone: string;
+    experience: string;
+    creationDate: string;
+    kitchenInfo: Record<string, unknown>;
+    allFilesWithData: Array<{
+      label: string;
+      section: string;
+      url: string;
+      presignedUrl: string;
+      imageBuffer?: Buffer;
+      dataUri?: string;
+    }>;
+    audioNotes: Array<{ url: string; transcription?: string; summary?: string }>;
+    additionalCommentText: string;
+    clientBudgetText: string;
+    roughQuoteText: string;
+    notesText: string;
+    kitchenSizeText: string;
+    sqFtText: string;
+    ceilingText: string;
+    MEDIA_KEYS_TO_EXCLUDE: Set<string>;
+  }): string {
+    const {
+      quote, customerName, customerEmail, customerPhone, experience, creationDate,
+      kitchenInfo, allFilesWithData, audioNotes, additionalCommentText,
+      clientBudgetText, roughQuoteText, notesText, kitchenSizeText, sqFtText,
+      ceilingText, MEDIA_KEYS_TO_EXCLUDE,
+    } = data;
+
+    const e = (s: unknown): string =>
+      String(s ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+
+    const bySection = (sec: string) => allFilesWithData.filter(f => f.section === sec);
+
+    const totalStr = `$${quote.totalPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+    const categoryLabel =
+      quote.category === QuoteCategory.KITCHEN ? 'Kitchen'
+      : quote.category === QuoteCategory.BATHROOM ? 'Bathroom'
+      : quote.category === QuoteCategory.BASEMENT ? 'Basement'
+      : quote.category === QuoteCategory.ADDITIONAL_WORK ? 'Additional Work'
+      : this.toTitleCase(quote.category);
+
+    let heroStrip = '';
+    if (quote.status === QuoteStatus.APPROVED) {
+      const d = (quote as any).updatedAt
+        ? new Date((quote as any).updatedAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+        : '';
+      heroStrip = `<div class="hero-strip-approved">Approved${d ? ' on ' + e(d) : ''}</div>`;
+    } else if (quote.status === QuoteStatus.REJECTED) {
+      heroStrip = `<div class="hero-strip-rejected">Rejected</div>`;
+    }
+
+    const renderFile = (file: { label: string; url: string; presignedUrl: string; dataUri?: string }, caption?: string): string => {
+      if (file.dataUri) {
+        return `<div class="img-wrap"><img src="${file.dataUri}" alt="${e(caption ?? file.label)}">${caption ? `<p class="img-caption">${e(caption)}</p>` : ''}</div>`;
+      }
+      const ext = file.url.split('?')[0].split('.').pop()?.toLowerCase() ?? '';
+      const type = ['mp4', 'mov', 'avi', 'mkv', 'webm'].includes(ext) ? 'VIDEO'
+        : this.isImageUrl(file.url) ? 'IMAGE' : 'FILE';
+      return `<a href="${e(file.presignedUrl)}" class="file-link"><span class="file-type">${type}</span><span class="file-name">${e(caption ?? this.friendlyFileName(file.url))}</span></a>`;
+    };
+
+    const renderFileGrid = (files: typeof allFilesWithData, cols = 3): string => {
+      if (!files.length) return '';
+      const imgs = files.filter(f => f.dataUri);
+      const links = files.filter(f => !f.dataUri);
+      let html = '';
+      if (imgs.length) {
+        const cls = cols === 2 ? 'img-grid-2' : 'img-grid';
+        html += `<div class="${cls}">${imgs.map(f => renderFile(f, imgs.length > 1 ? f.label : undefined)).join('')}</div>`;
+        if (links.length) html += '<div class="spacer"></div>';
+      }
+      html += links.map(f => renderFile(f)).join('');
+      return html;
+    };
+
+    const field = (label: string, value: string): string => {
+      if (!value) return '';
+      return `<div><span class="field-label">${e(label)}</span><p class="field-value">${e(value)}</p></div>`;
+    };
+
+    const section = (title: string, content: string): string =>
+      `<div class="section"><h4 class="section-title">${e(title)}</h4>${content}</div>`;
+
+    const customerSection = section('Customer',
+      `<div class="grid-3">${field('Name', customerName)}${field('Email', customerEmail)}${field('Phone', customerPhone)}</div>`);
+
+    const projectFields = [
+      field('Experience', experience),
+      (quote as any).projectName ? field('Project', (quote as any).projectName) : '',
+      kitchenSizeText ? field('Kitchen Size', kitchenSizeText) : '',
+      sqFtText ? field('Square Footage', sqFtText) : '',
+      ceilingText ? field('Ceiling Height', ceilingText) : '',
+      (quote as any).address ? field('Address', (quote as any).address) : '',
+      (quote as any).source ? field('Source', this.toTitleCase(String((quote as any).source))) : '',
+      clientBudgetText ? field('Client Budget', clientBudgetText) : '',
+      roughQuoteText ? field('Rough Quote', roughQuoteText) : '',
+    ].join('');
+    const projectSection = section('Project Details', `<div class="grid-3">${projectFields}</div>`);
+
+    const notesSection = notesText
+      ? section('Notes', `<p style="font-size:13px;color:#332F28;font-style:italic;">${e(notesText)}</p>`)
+      : '';
+
+    const kitchenCategoryTitle =
+      quote.category === QuoteCategory.KITCHEN ? 'Kitchen Information'
+      : quote.category === QuoteCategory.BATHROOM ? 'Bathroom Information'
+      : quote.category === QuoteCategory.BASEMENT ? 'Basement Information'
+      : quote.category === QuoteCategory.ADDITIONAL_WORK ? 'Additional Work Information'
+      : 'Estimate Information';
+
+    const kitchenCells = Object.entries(kitchenInfo)
+      .filter(([key, value]) => {
+        if (MEDIA_KEYS_TO_EXCLUDE.has(key)) return false;
+        if (value === undefined || value === null || value === '' || value === false || value === 'No') return false;
+        if (typeof value === 'string') {
+          const lc = value.toLowerCase().trim();
+          if (lc === 'none' || lc === 'n/a' || lc === 'no') return false;
+        }
+        if (Array.isArray(value) || (typeof value === 'object' && value !== null)) return false;
+        return true;
+      })
+      .map(([key, value]) => {
+        const displayVal = value === true ? 'Yes' : this.formatValueForDisplay(value);
+        if (!displayVal) return '';
+        const lc = String(displayVal).toLowerCase().trim();
+        if (lc === 'none' || lc.startsWith('none ') || lc === 'n/a') return '';
+        return `<div><span class="field-label">${e(this.formatKeyForDisplay(key))}</span><p class="field-value">${e(displayVal)}</p></div>`;
+      })
+      .filter(Boolean)
+      .join('');
+    const kitchenSection = kitchenCells ? section(kitchenCategoryTitle, `<div class="grid-3">${kitchenCells}</div>`) : '';
+
+    const matFiles = bySection('materials');
+    const hasMat = matFiles.length > 0 || (quote.materials?.items?.length ?? 0) > 0;
+    let matContent = '';
+    if (hasMat) {
+      if (matFiles.length > 0) {
+        matContent += `<p class="subsection-label">Materials File</p>${renderFile(matFiles[0])}`;
+      }
+      if (quote.materials?.items?.length) {
+        matContent += `<table class="mat-table"${matFiles.length ? ' style="margin-top:16px;"' : ''}><thead><tr><th>Qty</th><th>Description</th></tr></thead><tbody>${
+          quote.materials.items.map(it => `<tr><td style="font-weight:700;width:70px;">${e(String(it.quantity))}</td><td>${e(it.description)}</td></tr>`).join('')
+        }</tbody></table>`;
+      }
+    }
+    const materialsSection = matContent ? section('Materials', matContent) : '';
+
+    const countertopsData = bySection('countertops');
+    const backsplashData = bySection('backsplash');
+    const sketchData = bySection('sketch');
+    let mediaContent = '';
+    if (countertopsData.length) {
+      mediaContent += `<p class="subsection-label">Countertops</p>${renderFileGrid(countertopsData, 3)}`;
+      if (backsplashData.length || sketchData.length) mediaContent += '<div class="spacer"></div>';
+    }
+    if (backsplashData.length) {
+      mediaContent += `<p class="subsection-label">Backsplash</p>${renderFileGrid(backsplashData, 3)}`;
+      if (sketchData.length) mediaContent += '<div class="spacer"></div>';
+    }
+    if (sketchData.length) {
+      mediaContent += `<p class="subsection-label">Sketches</p>${renderFileGrid(sketchData, 2)}`;
+    }
+    const mediaSection = mediaContent ? section('Media', mediaContent) : '';
+
+    const audioCards = audioNotes.map((note, i) => {
+      if (!note?.url) return '';
+      const title = audioNotes.length > 1 ? `Audio Note ${i + 1} of ${audioNotes.length}` : 'Audio Note';
+      let c = `${i > 0 ? '<div class="spacer"></div>' : ''}<p class="subsection-label">${e(title)}</p>`;
+      c += `<a href="${e(note.url)}" class="file-link"><span class="file-type">AUDIO</span><span class="file-name">Listen to Audio</span></a>`;
+      if (note.summary) c += `<div class="audio-card"><p class="audio-label">Summary</p><p class="audio-text">${e(note.summary)}</p></div>`;
+      if (note.transcription) c += `<p class="transcription-label">Transcription</p><p class="transcription-text">${e(note.transcription)}</p>`;
+      return c;
+    }).filter(Boolean).join('');
+    const audioSection = audioCards ? section('Audio Notes', audioCards) : '';
+
+    const additionalData = bySection('additional');
+    let addContent = '';
+    if (additionalCommentText) {
+      addContent += `<p style="font-size:13px;color:#332F28;white-space:pre-line;margin-bottom:${additionalData.length ? '12px' : '0'};">${e(additionalCommentText)}</p>`;
+    }
+    if (additionalData.length) addContent += renderFileGrid(additionalData, 3);
+    const additionalSection = addContent ? section('Additional Comments & Media', addContent) : '';
+
+    let rejectionCard = '';
+    if (quote.status === QuoteStatus.REJECTED) {
+      const rc = (quote as any).rejectionComments;
+      if (rc?.comment) {
+        const rejDate = rc.rejectedAt
+          ? new Date(rc.rejectedAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+          : '';
+        let rcContent = `<p style="font-size:13px;color:#332F28;margin-bottom:8px;">${e(rc.comment)}</p>`;
+        if (rejDate) rcContent += `<p style="font-size:11px;color:#535353;margin-bottom:12px;">Rejected on ${e(rejDate)}</p>`;
+        if (Array.isArray(rc.mediaFiles) && rc.mediaFiles.length > 0) {
+          const imgUrls = (rc.mediaFiles as string[]).filter((u: string) => this.isImageUrl(u));
+          const otherUrls = (rc.mediaFiles as string[]).filter((u: string) => !this.isImageUrl(u));
+          if (imgUrls.length) {
+            rcContent += `<div class="img-grid">${imgUrls.map((u: string) => `<div class="img-wrap"><img src="${e(u)}" alt="Rejection media"></div>`).join('')}</div>`;
+          }
+          rcContent += otherUrls.map((u: string) => {
+            const ext2 = u.split('?')[0].split('.').pop()?.toLowerCase() ?? '';
+            const type = ['mp4', 'mov', 'avi', 'mkv', 'webm'].includes(ext2) ? 'VIDEO' : 'FILE';
+            return `<a href="${e(u)}" class="file-link"><span class="file-type">${type}</span><span class="file-name">${e(this.friendlyFileName(u))}</span></a>`;
+          }).join('');
+        }
+        rejectionCard = `<div class="rejection-card"><h4 class="rejection-title">Rejection Details</h4>${rcContent}</div>`;
+      }
+    }
+
+    const allSections = [
+      customerSection, projectSection, notesSection, kitchenSection,
+      materialsSection, mediaSection, audioSection, additionalSection,
+    ].filter(Boolean).join('');
+
+    const generatedOn = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+
+    return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background: #F9F7F4; color: #332F28; font-size: 14px; line-height: 1.5; }
+    @page { size: A4; margin: 32px 40px 40px 40px; }
+    .hero { background: #3A7344; border-radius: 40px; padding: 32px 36px; margin-bottom: 20px; }
+    .hero-badges { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+    .badge { display: inline-flex; align-items: center; padding: 4px 14px; border-radius: 9999px; font-size: 11px; font-weight: 600; }
+    .badge-category { background: rgba(255,255,255,0.2); color: white; }
+    .badge-status { background: rgba(255,255,255,0.15); color: white; }
+    .badge-co { background: rgba(251,191,36,0.8); color: #332F28; }
+    .hero-main { display: flex; justify-content: space-between; align-items: flex-start; }
+    .hero-title { color: white; font-size: 26px; font-weight: 700; }
+    .hero-version { color: rgba(255,255,255,0.6); font-weight: 400; }
+    .hero-date { color: rgba(255,255,255,0.7); font-size: 12px; margin-top: 8px; }
+    .hero-cost { text-align: right; }
+    .hero-cost-label { color: rgba(255,255,255,0.6); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+    .hero-cost-value { color: white; font-size: 26px; font-weight: 700; }
+    .hero-strip-approved { border-top: 1px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.1); margin: 20px -36px -32px; padding: 10px 36px; border-radius: 0 0 40px 40px; color: rgba(255,255,255,0.9); font-size: 12px; }
+    .hero-strip-rejected { border-top: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.15); margin: 20px -36px -32px; padding: 10px 36px; border-radius: 0 0 40px 40px; color: rgba(255,255,255,0.9); font-size: 12px; }
+    .card { border: 1px solid rgba(191,191,191,0.6); border-radius: 32px; background: white; overflow: hidden; margin-bottom: 20px; }
+    .section { padding: 24px; border-bottom: 1px solid rgba(191,191,191,0.4); }
+    .section:last-child { border-bottom: none; }
+    .section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: #997A63; margin-bottom: 16px; }
+    .subsection-label { font-size: 12px; font-weight: 600; color: #332F28; margin-bottom: 8px; }
+    .spacer { height: 14px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+    .field-label { font-size: 11px; color: #535353; display: block; margin-bottom: 3px; }
+    .field-value { font-size: 13px; font-weight: 600; color: #332F28; }
+    .img-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+    .img-grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    .img-wrap { border-radius: 10px; overflow: hidden; background: #f0ece8; }
+    .img-wrap img { width: 100%; height: 150px; object-fit: cover; display: block; }
+    .img-caption { font-size: 10px; color: #535353; padding: 4px 8px; text-align: center; }
+    .file-link { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 8px; border: 1px solid rgba(191,191,191,0.6); background: #F9F7F4; margin-bottom: 6px; text-decoration: none; }
+    .file-type { font-size: 10px; font-weight: 700; color: #997A63; text-transform: uppercase; padding-right: 8px; border-right: 1px solid rgba(191,191,191,0.5); min-width: 36px; flex-shrink: 0; }
+    .file-name { font-size: 12px; color: #3A7344; text-decoration: underline; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .mat-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .mat-table th { background: #F5F0EA; padding: 7px 12px; text-align: left; font-size: 10px; color: #997A63; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700; }
+    .mat-table td { padding: 7px 12px; border-bottom: 1px solid rgba(191,191,191,0.3); }
+    .audio-card { border-radius: 10px; background: rgba(58,115,68,0.05); border: 1px solid rgba(58,115,68,0.2); padding: 12px; margin-top: 8px; }
+    .audio-label { font-size: 10px; font-weight: 700; color: #3A7344; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
+    .audio-text { font-size: 12px; color: #332F28; white-space: pre-line; }
+    .transcription-label { font-size: 10px; font-weight: 700; color: #535353; text-transform: uppercase; letter-spacing: 0.08em; margin: 10px 0 4px; }
+    .transcription-text { font-size: 11px; color: #535353; font-style: italic; white-space: pre-line; }
+    .rejection-card { border: 1px solid rgba(220,38,38,0.3); border-radius: 16px; background: rgba(220,38,38,0.04); padding: 20px; margin-bottom: 20px; }
+    .rejection-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: #dc2626; margin-bottom: 12px; }
+    .footer { text-align: center; font-size: 10px; color: #BFBFBF; padding-top: 14px; border-top: 1px solid rgba(191,191,191,0.4); margin-top: 4px; }
+    a { color: #3A7344; }
+  </style>
+</head>
+<body>
+  <div class="hero">
+    <div class="hero-badges">
+      <span class="badge badge-category">${e(categoryLabel)}</span>
+      <span class="badge badge-status">${e(this.toTitleCase(quote.status))}</span>
+      ${(quote as any).isChangeOrder ? '<span class="badge badge-co">Change Order</span>' : ''}
+    </div>
+    <div class="hero-main">
+      <div>
+        <h1 class="hero-title">Estimate <span class="hero-version">v${e(String(quote.versionNumber))}</span></h1>
+        <p class="hero-date">${e(creationDate)}</p>
+      </div>
+      <div class="hero-cost">
+        <p class="hero-cost-label">Total Cost</p>
+        <p class="hero-cost-value">${e(totalStr)}</p>
+      </div>
+    </div>
+    ${heroStrip}
+  </div>
+  <div class="card">${allSections}</div>
+  ${rejectionCard}
+  <div class="footer">BA Kitchen &amp; Bath Design &mdash; Generated on ${e(generatedOn)}</div>
+</body>
+</html>`;
   }
 
   async findAll(
@@ -1521,7 +1325,8 @@ export class QuoteService {
       throw new BadRequestException('Could not generate PDF for this quote');
     }
 
-    return pdfUrl;
+    // Add cache-buster so browsers always fetch the freshly generated file
+    return `${pdfUrl}?v=${Date.now()}`;
   }
 
   async findByProjectId(projectId: string): Promise<Quote[]> {

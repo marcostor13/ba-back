@@ -15,6 +15,7 @@ export interface CustomerDocument {
   description: string;
   companyId?: MongooseSchema.Types.ObjectId;
   userId?: MongooseSchema.Types.ObjectId;
+  estimatorId?: MongooseSchema.Types.ObjectId;
   addresses?: {
     label?: string;
     address: string;
@@ -69,6 +70,9 @@ export class Customer {
 
   @Prop({ type: MongooseSchema.Types.ObjectId, required: false, ref: 'User' })
   userId?: MongooseSchema.Types.ObjectId;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, required: false, ref: 'User' })
+  estimatorId?: MongooseSchema.Types.ObjectId;
 
   @Prop({
     type: [

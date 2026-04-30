@@ -6,6 +6,7 @@ export interface UserDocument extends Document {
     email: string;
     name: string;
     password: string;
+    forcePasswordChange?: boolean;
     resetCodeHash?: string;
     resetCodeExpiresAt?: Date;
     verificationCodeHash?: string;
@@ -38,6 +39,9 @@ export class User {
 
     @Prop({ type: Date, required: false })
     verificationCodeExpiresAt?: Date;
+
+    @Prop({ type: Boolean, default: false })
+    forcePasswordChange?: boolean;
 
     @Prop({ type: Object, required: false })
     registrationData?: {

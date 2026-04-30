@@ -74,11 +74,12 @@ export class InvoiceService {
     return newInvoice.save();
   }
 
-  async findAll(companyId?: string, projectId?: string): Promise<Invoice[]> {
+  async findAll(companyId?: string, projectId?: string, customerId?: string): Promise<Invoice[]> {
     const filter: any = {};
     if (companyId) filter.companyId = new Types.ObjectId(companyId);
     if (projectId) filter.projectId = new Types.ObjectId(projectId);
-    
+    if (customerId) filter.customerId = new Types.ObjectId(customerId);
+
     return this.invoiceModel
       .find(filter)
       .populate('quoteId', 'versionNumber totalPrice')
@@ -95,7 +96,15 @@ export class InvoiceService {
       .populate('customerId')
       .populate('companyId')
       .exec();
-      
+
+    if (!invoice) {
+      throw new NotFoundException(`Invoice with ID ${id} not found`);
+    }
+    return invoice;
+  }
+
+  async delete(id: string): Promise<Invoice> {
+    const invoice = await this.invoiceModel.findByIdAndDelete(id).exec();
     if (!invoice) {
       throw new NotFoundException(`Invoice with ID ${id} not found`);
     }
